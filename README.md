@@ -52,7 +52,7 @@ Install Git, the .NET 10 SDK, and Node.js 24 LTS (including npm).
 Clone the repository:
 
 ```sh
-git clone https://github.com/J35P1N/ISLA---Indespensible-Shopping-List-Application.git ISLA
+git clone https://github.com/J35P1N/ISLA.git
 cd ISLA
 ```
 
@@ -119,6 +119,31 @@ The build uses `npm ci` and separate Node/.NET SDK stages. Only the published ap
 For deployment, terminate TLS at your ingress/reverse proxy and enable WebSockets for interactive server components. Configure trusted forwarded headers for your hosting environment before HTTPS redirection if the proxy forwards requests over HTTP. Data Protection keys persist in the private data volume so logins survive container replacement. Simple JSON mode supports exactly one running instance; it refuses another process using the same directory. Supply environment-specific settings through environment variables or your deployment's secret store.
 
 References: [Tailwind CLI](https://tailwindcss.com/docs/installation/tailwind-cli), [.NET container ports and users](https://learn.microsoft.com/dotnet/core/docker/introduction).
+
+## Automated builds and published images
+
+Pull requests targeting `master` and pushes to `master` run the Release build, .NET and JavaScript tests, and container startup checks for both AMD64 and ARM64. Container checks verify that the first-run setup page and its Blazor startup script are served. Test reports are available as workflow artifacts for seven days.
+
+After these checks pass on `master`, GitHub Actions publishes `ghcr.io/j35p1n/isla:latest` and `ghcr.io/j35p1n/isla:sha-<full-commit-sha>`. Each tag supports both architectures; Docker selects the appropriate image. Pull requests do not publish images or receive registry credentials. The workflow uses the repository's built-in `GITHUB_TOKEN`; no personal access token is required. The workflow can also be run manually; publishing is restricted to `master`.
+
+Once the package has been published and made public, launch a prebuilt image:
+
+```sh
+docker pull ghcr.io/j35p1n/isla:latest
+docker run -d --name isla -p 8080:8080 \
+  -v recipe-data:/app/data ghcr.io/j35p1n/isla:latest
+docker logs isla
+```
+
+Read `ISLA first-run setup token:` from **the container logs**, open http://localhost:8080, and enter the token to begin setup. See the Docker section for storage and deployment requirements. Stop and remove this container with `docker stop isla` followed by `docker rm isla`; the data volume is retained. Use the commit-specific tag when you need to pin a deployment to a particular build.
+
+### Repository owner configuration
+
+Enable GitHub Actions and allow the pinned actions used by `.github/workflows/ci.yml`. After the first successful publication, open your GitHub profile's **Packages → isla → Package settings → Change visibility** and select **Public**. Package visibility is separate from repository visibility; public packages allow anonymous pulls. If an `isla` package already exists, grant this repository Actions write access in that package's settings before publishing. See [GitHub's container registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
+
+Protect `master` with a ruleset requiring pull requests and the **Build and test**, **Container (amd64)** and **Container (arm64)** checks. Keep approval requirements for workflows from outside contributors. Actions are pinned to commit hashes, and Dependabot checks those pins weekly.
+
+Before making the repository public, review the complete Git history, commit email addresses, existing Actions logs and artifacts, and repository/environment secrets. Existing workflow logs become public with the repository. Enable secret scanning, push protection and private vulnerability reporting where available. The project includes an MIT licence; keep runtime data, tokens and deployment credentials outside source control.
 
 ## Recipes and persistence
 

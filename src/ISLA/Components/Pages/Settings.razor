@@ -2,8 +2,10 @@
 @attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Administrator,Member")]
 @rendermode InteractiveServer
 @using ISLA.Security
+@using ISLA.Services
 @using System.Security.Claims
 @inject Accounts Accounts
+@inject HouseholdTransfer HouseholdTransfer
 @inject AccessGuard Access
 @inject SignInNavigation Navigation
 <PageTitle>Settings | ISLA</PageTitle>
@@ -17,7 +19,6 @@ else
 <div class="page-intro space-y-4">
     <h1>Settings</h1>
     @if (message is not null) { <p role="status">@message</p> }
-    @if (Transfer is not null) { <p role="status">@(Transfer == "imported" ? "Household imported successfully." : "Import rejected. Use a valid ISLA export and an empty household. Maximum file size is 10 MB.")</p> }
     <h2>Change your password</h2>
     <form @onsubmit="ChangePassword" @onsubmit:preventDefault class="max-w-xl space-y-3">
         <label class="block">Current password<input class="field" type="password" @bind="currentPassword" autocomplete="current-password" required /></label>
@@ -32,10 +33,17 @@ else
         <p>Simple JSON mode · one application instance. DataDirectory is controlled by the operator and requires a restart to change.</p>
         <a class="secondary-button" href="/admin/export" data-enhance-nav="false">Export household</a>
         <p>Exports contain household data only. Accounts, passwords, sessions, setup tokens and encryption keys are excluded. Import requires a completely empty household.</p>
-        <form method="post" action="/admin/import" enctype="multipart/form-data" data-enhance="false" class="space-y-3">
-            <AntiforgeryToken />
-            <label class="block">Household export (JSON, maximum 10 MB)<input class="field" type="file" name="household" accept=".json,application/json" required /></label>
-            <button class="primary-button">Import into empty household</button>
+        <form @onsubmit="ImportHousehold" @onsubmit:preventDefault class="space-y-3" novalidate>
+            <label class="block">Household export (JSON, maximum 10 MB)
+                <InputFile class="field" OnChange="SelectImport" accept=".json,application/json" disabled="@importBusy" aria-describedby="import-result" />
+            </label>
+            <button type="submit" class="primary-button" disabled="@importBusy">@(importBusy ? "Importing household…" : "Import into empty household")</button>
+            @if (importMessage is not null || Transfer is not null)
+            {
+                var failed = importMessage is not null ? importFailed : Transfer != "imported";
+                <p id="import-result" role="@(failed ? "alert" : "status")"
+                   class="@(failed ? "rounded-xl bg-red-50 p-3 text-sm text-red-800" : "rounded-xl bg-blue-50 p-3 text-sm text-blue-900")">@(importMessage ?? (Transfer == "imported" ? "Household imported successfully." : "Import rejected. Use a valid ISLA export and an empty household. Maximum file size is 10 MB."))</p>
+            }
         </form>
     </section>
     <section class="page-intro space-y-4">
@@ -55,9 +63,21 @@ else
                     <button class="secondary-button" @onclick="() => Manage(() => Accounts.UpdateAsync(account.Id, account.Administrator, !account.Disabled))">@(account.Disabled ? "Enable" : "Disable")</button>
                     <button class="secondary-button" @onclick="() => Manage(() => Accounts.RevokeAsync(account.Id))">Revoke all sessions</button>
                 </div>
-                <form @onsubmit="() => ResetPassword(account.Id)" @onsubmit:preventDefault class="max-w-xl space-y-2">
-                    <label>New password for @account.Name<input class="field" type="password" value="@resetPasswords.GetValueOrDefault(account.Id)" @oninput="e => resetPasswords[account.Id] = e.Value?.ToString() ?? string.Empty" autocomplete="new-password" minlength="12" maxlength="256" required /></label>
-                    <button class="secondary-button">Reset password and revoke sessions</button>
+                <form @onsubmit="() => ResetPassword(account.Id)" @onsubmit:preventDefault class="max-w-xl space-y-2" novalidate>
+                    <label>New password for @account.Name
+                        <input class="field" type="password" value="@resetPasswords.GetValueOrDefault(account.Id)"
+                               @oninput="e => SetResetPassword(account.Id, e.Value?.ToString() ?? string.Empty)"
+                               aria-describedby="@($"reset-help-{account.Id} reset-feedback-{account.Id}")"
+                               aria-invalid="@(resetFeedback.GetValueOrDefault(account.Id).IsError ? "true" : "false")"
+                               disabled="@pendingResets.Contains(account.Id)" autocomplete="new-password" minlength="12" maxlength="256" required />
+                    </label>
+                    <p id="@($"reset-help-{account.Id}")" class="text-sm text-slate-600">Use 12–256 characters. This signs the user out of all browsers.</p>
+                    <button type="submit" class="secondary-button" disabled="@pendingResets.Contains(account.Id)">@(pendingResets.Contains(account.Id) ? "Resetting password…" : "Reset password and revoke sessions")</button>
+                    @if (resetFeedback.TryGetValue(account.Id, out var feedback))
+                    {
+                        <p id="@($"reset-feedback-{account.Id}")" role="@(feedback.IsError ? "alert" : "status")"
+                           class="@(feedback.IsError ? "rounded-xl bg-red-50 p-3 text-sm text-red-800" : "rounded-xl bg-blue-50 p-3 text-sm text-blue-900")">@feedback.Message</p>
+                    }
                 </form>
             </div>
         }
@@ -67,6 +87,10 @@ else
 @code {
     [SupplyParameterFromQuery(Name = "transfer")] public string? Transfer { get; set; }
     private bool administrator, createAdmin, ready;
+    private const long MaximumImportBytes = 10 * 1024 * 1024;
+    private IBrowserFile? importFile;
+    private string? importMessage;
+    private bool importBusy, importFailed;
     protected override void OnAfterRender(bool firstRender)
     {
         if (firstRender) { ready = true; StateHasChanged(); }
@@ -75,11 +99,53 @@ else
     private string? message;
     private List<Account> users = [];
     private readonly Dictionary<string, string> resetPasswords = [];
+    private readonly Dictionary<string, (string Message, bool IsError)> resetFeedback = [];
+    private readonly HashSet<string> pendingResets = [];
     protected override async Task OnInitializedAsync()
     {
         var user = await Access.RequireAsync();
         administrator = user.IsInRole("Administrator");
         if (administrator) users = await Accounts.ListAsync();
+    }
+    private void SelectImport(InputFileChangeEventArgs args)
+    {
+        importFile = args.File;
+        importMessage = null;
+        Transfer = null;
+    }
+    private async Task ImportHousehold()
+    {
+        if (importBusy) return;
+        importBusy = true;
+        importMessage = null;
+        Transfer = null;
+        importFailed = false;
+        try
+        {
+            await Access.RequireAsync(true);
+            if (importFile is null || importFile.Size == 0) throw new ArgumentException("Choose an ISLA household export file to import.");
+            if (importFile.Size > MaximumImportBytes) throw new ArgumentException("Import rejected. The file must be 10 MB or smaller. Existing household data was not changed.");
+            await using var stream = importFile.OpenReadStream(MaximumImportBytes);
+            await HouseholdTransfer.ImportAsync(stream);
+            importMessage = "Household imported successfully. Your recipes, plans, shopping and prices are now available.";
+        }
+        catch (ArgumentException ex)
+        {
+            importFailed = true;
+            importMessage = ex.Message;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            importFailed = true;
+            importMessage = "Your administrator session has ended. Sign in again to import household data.";
+            await Navigation.GoToLoginAsync();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or System.Text.Json.JsonException)
+        {
+            importFailed = true;
+            importMessage = "Import could not be completed. Check the file and ask the operator to check storage if the problem continues.";
+        }
+        finally { importBusy = false; }
     }
     private async Task ChangePassword()
     {
@@ -106,5 +172,34 @@ else
         catch (ArgumentException ex) { message = ex.Message; }
     }
     private Task CreateAccount() => Manage(async () => { await Accounts.CreateAsync(name, initialPassword, createAdmin); name = initialPassword = ""; createAdmin = false; });
-    private Task ResetPassword(string id) => Manage(async () => { await Accounts.PasswordAsync(id, resetPasswords.GetValueOrDefault(id) ?? ""); resetPasswords.Remove(id); });
+    private void SetResetPassword(string id, string password)
+    {
+        resetPasswords[id] = password;
+        resetFeedback.Remove(id);
+    }
+    private async Task ResetPassword(string id)
+    {
+        if (!pendingResets.Add(id)) return;
+        resetFeedback.Remove(id);
+        try
+        {
+            await Access.RequireAsync(true);
+            await Accounts.PasswordAsync(id, resetPasswords.GetValueOrDefault(id) ?? "");
+            resetPasswords.Remove(id);
+            resetFeedback[id] = ("Password reset. All of this user's sessions have been revoked.", false);
+            try { await Access.RequireAsync(true); }
+            catch (UnauthorizedAccessException) { await Navigation.GoToLoginAsync(); }
+        }
+        catch (ArgumentException ex) { resetFeedback[id] = (ex.Message, true); }
+        catch (UnauthorizedAccessException)
+        {
+            resetFeedback[id] = ("Your administrator session has ended. Sign in again.", true);
+            await Navigation.GoToLoginAsync();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or System.Text.Json.JsonException)
+        {
+            resetFeedback[id] = ("The password could not be reset. Try again or ask the operator to check storage.", true);
+        }
+        finally { pendingResets.Remove(id); }
+    }
 }

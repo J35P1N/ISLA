@@ -20,7 +20,7 @@ public sealed class Installation : IDisposable
         Directory.CreateDirectory(DirectoryPath);
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(DirectoryPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         try { lease = new FileStream(Path.Combine(DirectoryPath, ".instance.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
-        catch (IOException ex) { throw new InvalidOperationException("Simple JSON mode requires exclusive access to DataDirectory. Stop the other ISLA process first.", ex); }
+        catch (IOException ex) { throw new DataDirectoryInUseException(ex); }
         token = config["Setup:Token"];
         if (string.IsNullOrEmpty(token) && config["Setup:TokenFile"] is { } file) token = File.ReadAllText(file).Trim();
     }
@@ -38,3 +38,6 @@ public sealed class Installation : IDisposable
     public bool HasToken => !string.IsNullOrWhiteSpace(token);
     public void Dispose() => lease.Dispose();
 }
+
+public sealed class DataDirectoryInUseException(IOException innerException) : InvalidOperationException(
+    "Simple JSON mode requires exclusive access to DataDirectory. Stop the other ISLA process first.", innerException);

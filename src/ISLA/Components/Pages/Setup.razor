@@ -7,14 +7,18 @@
 <div class="page-intro mx-auto max-w-xl space-y-4">
     <p class="eyebrow">Welcome to your household</p>
     <h1>Set up ISLA</h1>
-    @if (!Wizard.HasToken)
+    @if (completed)
+    {
+        <p role="status">Setup complete. <a href="/login" class="underline" data-enhance-nav="false">Sign in</a> to start using ISLA.</p>
+    }
+    else if (!Wizard.HasToken)
     {
         <p>Restart ISLA and check the server console for the first-run setup token.</p>
     }
     else
     {
         <p>Step @step of 4</p>
-        @if (error is not null) { <p role="alert" class="text-red-700">@error</p><p>If setup completed, <a href="/login" class="underline">sign in</a>.</p> }
+        @if (error is not null) { <p role="alert" class="text-red-700">@error</p> }
         <form @onsubmit="Next" @onsubmit:preventDefault>
             @if (step == 1)
             {
@@ -51,7 +55,7 @@
     private int step = 1;
     private string token = "", username = "", password = "", confirm = "";
     private string? error;
-    private bool busy, ready;
+    private bool busy, ready, completed;
     protected override void OnAfterRender(bool firstRender)
     {
         if (firstRender) { ready = true; StateHasChanged(); }
@@ -66,7 +70,7 @@
             if (step == 2) await Wizard.ValidateStorageAsync(token);
             if (step == 3) { Accounts.Validate(username, password); if (password != confirm) throw new ArgumentException("Passwords do not match."); }
             if (step < 4) step++;
-            else { await Wizard.CompleteAsync(token, username, password); password = confirm = token = ""; await Navigation.GoToLoginAsync(); }
+            else { await Wizard.CompleteAsync(token, username, password); completed = true; password = confirm = token = ""; await Navigation.GoToLoginAsync(); }
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException) { error = ex is ArgumentException ? ex.Message : "Storage validation failed. Ask the operator to check the data directory and existing files."; }
         finally { busy = false; }

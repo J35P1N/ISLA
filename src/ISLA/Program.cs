@@ -10,7 +10,14 @@ var builder = WebApplication.CreateBuilder(configurationArgs);
 if (builder.Configuration["ISLA_CONFIG_FILE"] is { Length: > 0 } configFile)
     builder.Configuration.AddJsonFile(Path.GetFullPath(configFile), optional: false, reloadOnChange: false)
         .AddEnvironmentVariables().AddCommandLine(configurationArgs);
-var installation = new Installation(builder.Configuration, builder.Environment);
+Installation installation;
+try { installation = new Installation(builder.Configuration, builder.Environment); }
+catch (DataDirectoryInUseException ex)
+{
+    Console.Error.WriteLine("ISLA could not start: " + ex.Message);
+    Environment.ExitCode = 1;
+    return;
+}
 builder.Services.AddSingleton(installation);
 builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(installation.KeysPath)).SetApplicationName("ISLA");
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
@@ -101,7 +108,11 @@ app.Use(async (context, next) =>
     {
         var configured = await context.RequestServices.GetRequiredService<Accounts>().IsConfiguredAsync();
         if (!configured && path != "/setup") { context.Response.Redirect("/setup"); return; }
-        if (configured && path == "/setup") { context.Response.Redirect("/login"); return; }
+        if (configured && path == "/setup")
+        {
+            context.Response.Redirect(context.User.Identity?.IsAuthenticated == true ? "/" : "/login");
+            return;
+        }
         if (configured && context.User.Identity?.IsAuthenticated != true && path != "/login" && path != "/Error") { context.Response.Redirect("/login"); return; }
     }
     await next();

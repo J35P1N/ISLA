@@ -98,10 +98,31 @@ public sealed class SetupAndSecurityTests : IDisposable
         Assert.Single(await accounts.ListAsync());
     }
     [Fact]
-    public void SecondInstanceRefused()
+    public async Task SecondInstanceRefusedWithConciseMessageAndNonzeroExitCode()
     {
         Installation();
-        Assert.Throws<InvalidOperationException>(() => new Installation(Config, new TestEnvironment()));
+        Assert.Throws<DataDirectoryInUseException>(() => new Installation(Config, new TestEnvironment()));
+        var start = new System.Diagnostics.ProcessStartInfo("dotnet")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            WorkingDirectory = directory
+        };
+        start.ArgumentList.Add(typeof(RecipeStore).Assembly.Location);
+        start.ArgumentList.Add("--DataDirectory=" + directory);
+        using var process = System.Diagnostics.Process.Start(start)!;
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await process.WaitForExitAsync(timeout.Token);
+        var error = await errorTask;
+        Assert.Equal(1, process.ExitCode);
+        Assert.Contains("ISLA could not start: Simple JSON mode requires exclusive access", error);
+        Assert.Single(error.Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        Assert.DoesNotContain("Unhandled exception", error);
+        Assert.DoesNotContain(" at ", error);
+        Assert.Empty(await outputTask);
     }
     [Fact]
     public async Task ExistingHouseholdIsPreservedAndBackedUp()

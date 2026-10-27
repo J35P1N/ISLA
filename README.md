@@ -60,8 +60,17 @@ Build and launch the application from the repository root:
 
 ```sh
 dotnet build ISLA.sln
+```
+
+Launch ISLA:
+
+```sh
 dotnet run --project src/ISLA --launch-profile http
 ```
+
+On first startup, ISLA generates a one-time setup token and prints `ISLA first-run setup token: ...` in the server console. Copy it into the setup page to prove you have access to the server. The generated token stays in memory, changes if you restart before completing setup, and stops working when setup completes. It is never displayed in the browser or included in exports. Completed installations do not generate or print setup tokens.
+
+For operator-managed deployments, you can instead supply `Setup__Token` through the environment or `Setup__TokenFile` pointing to a restricted mounted token file. Explicit tokens are not printed by ISLA. Never put tokens in a URL or commit them. Setup verifies the operator token, confirms **Simple JSON** storage and validates the data directory, then asks for an administrator account before the final review and initialisation.
 
 Open http://localhost:5080. The .NET build automatically installs locked npm dependencies when missing and compiles Tailwind before static assets are discovered. Commit `package-lock.json` when dependencies change; run `npm ci --prefix src/ISLA` to synchronize an existing install.
 
@@ -87,9 +96,14 @@ Both commands generate minified CSS. Generated CSS, build outputs, and npm depen
 
 ## Docker
 
+Start Compose and read the generated first-run token from its logs:
+
 ```sh
 docker compose up --build -d
+docker compose logs isla
 ```
+
+Enter the token shown after `ISLA first-run setup token:` in the setup page. A restart before setup completes generates a new token; once setup completes no token is generated.
 
 Open http://localhost:8080. Stop with `docker compose down`.
 
@@ -97,12 +111,12 @@ Or build and run directly:
 
 ```sh
 docker build -t isla .
-docker run --rm -p 8080:8080 isla
+docker run --rm -p 8080:8080 -v recipe-data:/app/data isla
 ```
 
 The build uses `npm ci` and separate Node/.NET SDK stages. Only the published application and ASP.NET runtime enter the final image, which runs as the built-in non-root app user on port 8080.
 
-For deployment, terminate TLS at your ingress/reverse proxy and enable WebSockets for interactive server components. Configure trusted forwarded headers for your hosting environment before HTTPS redirection if the proxy forwards requests over HTTP. Persist ASP.NET Core Data Protection keys outside the container when sessions must survive container replacement; multiple replicas also require an appropriate server interactivity/session affinity strategy. Supply environment-specific settings through environment variables or your deployment's secret store.
+For deployment, terminate TLS at your ingress/reverse proxy and enable WebSockets for interactive server components. Configure trusted forwarded headers for your hosting environment before HTTPS redirection if the proxy forwards requests over HTTP. Data Protection keys persist in the private data volume so logins survive container replacement. Simple JSON mode supports exactly one running instance; it refuses another process using the same directory. Supply environment-specific settings through environment variables or your deployment's secret store.
 
 References: [Tailwind CLI](https://tailwindcss.com/docs/installation/tailwind-cli), [.NET container ports and users](https://learn.microsoft.com/dotnet/core/docker/introduction).
 
@@ -112,13 +126,44 @@ Open **Recipes** to add, search, edit, and delete recipes. Each recipe has a nam
 
 Use whole-number quantities for individual items. Measurements support decimal values and UK metric/imperial cooking units: g, kg, ml, l, tsp, tbsp, oz, lb, fl oz, pint, and pinch. Measurements are stored as entered; automatic unit conversion is not performed.
 
-Data is stored in `App_Data/recipes.json` by default, outside the static web root and ignored by Git. Override the directory with the `DataDirectory` environment variable. Writes are serialized and replace the file atomically. This lightweight file store supports a single running application instance shared by the household; simultaneous edits of the same recipe use the last saved version. Use a database before running multiple app instances against shared storage.
+Data is stored in `App_Data/recipes.json` by default, outside the static web root and ignored by Git. Override the directory with the `DataDirectory` environment variable. Writes are serialized and replace the file atomically. The process holds an exclusive directory lock for its lifetime; use a local filesystem with reliable locking, not a shared network filesystem. This lightweight file store supports a single running application instance shared by the household; simultaneous edits of the same recipe use the last saved version. Use a database before running multiple app instances against shared storage.
 
 Docker Compose mounts the `recipe-data` named volume at `/app/data`. It survives container replacement and `docker compose down`; `docker compose down -v` removes it. Back up this volume (or the local data directory) to protect your collection. A direct `docker run` should also mount a volume with `-v recipe-data:/app/data`.
 
-The app currently has no sign-in: everyone who can reach it shares the recipe collection. The opening page shows a Monday–Sunday calendar for the current UK week. Add one saved recipe per day for the evening meal. The same recipe can be planned on different days. Remove a planned meal using its trash icon to choose a replacement. Existing days with multiple meals remain visible so they can be removed without losing saved data. Navigate between weeks to plan ahead. Plans are persisted with the recipe collection.
+Everyone must sign in to access the shared household. Administrators create accounts in Settings; there is no public registration. The opening page shows a Monday–Sunday calendar for the current UK week. Add one saved recipe per day for the evening meal. The same recipe can be planned on different days. Remove a planned meal using its trash icon to choose a replacement. Existing days with multiple meals remain visible so they can be removed without losing saved data. Navigate between weeks to plan ahead. Plans are persisted with the recipe collection.
 
 The Shopping list page totals ingredients for the selected week. Each meal uses the full recipe quantities; matching names (case-insensitive) and units are added together. Kilograms convert to grams and litres to millilitres before combining; other units remain separate. Recipe edits update future shopping-list calculations; deleting a recipe also removes its planned meals. Existing recipe files are compatible and begin with an empty plan.
+
+## Accounts, backup and recovery
+
+The monogram labelled **Account** in the bottom navigation opens your signed-in profile and **Sign out**. Administrators see **Settings** for household administration; members see **Account settings** for their own password. Settings lets every user change their password. Administrators can create accounts, change Administrator/Member roles, disable accounts, reset passwords and revoke all of a user's sessions. The last active administrator cannot be disabled or demoted. Password changes, resets, role changes and disabling an account revoke its existing sessions. Open interactive pages revalidate each minute, and every household operation checks its session immediately. Five failed password attempts lock the account for 15 minutes.
+
+**Remember this browser** uses a fixed 90-day expiry from sign-in, with no sliding extension. Unchecked logins use a session cookie and a maximum server lifetime of 24 hours. Logout revokes the current session. HTTPS is required for deployed use; terminate TLS at your trusted reverse proxy or configure HTTPS directly.
+
+The private data directory contains `recipes.json`, `identity.json` (password hashes and revocable sessions), `installation.json`, and `keys/` (Data Protection keys). Unix files are restricted to their owner. Keep the entire directory private, writable by the application user, and backed up together while ISLA is stopped. Existing household files are preserved during setup, with a `recipes.json.pre-setup.bak` backup. Invalid or missing configured files show an HTTP 503 recovery page rather than reopening setup or replacing data. Do not edit these files while ISLA is running.
+
+Admin **Settings → Export household** downloads a versioned JSON export of recipes, goods, plans, extras, overrides, pantry, purchases and prices. Accounts, hashes, browser sessions, secrets and keys are excluded. **Import** validates the export and accepts only an empty household, with a 10 MB limit. Failed validation leaves the destination unchanged. To move storage in a later stage: export, stop/reconfigure/restart into an empty destination, initialise its administrator, then import. Keep the old volume until the import is verified; recreate member accounts at the destination.
+
+For a forgotten administrator password, stop ISLA first and create a restricted file containing the new password (12–256 characters). Run the operator command against the same data directory:
+
+```sh
+ISLA_RESET_USERNAME=admin ISLA_RESET_PASSWORD_FILE=/private/new-password \
+dotnet run --project src/ISLA --no-launch-profile -- --reset-admin
+```
+
+For a container, with the normal service stopped:
+
+```sh
+docker compose run --rm --no-deps -e ISLA_RESET_USERNAME=admin \
+  -e ISLA_RESET_PASSWORD_FILE=/run/secrets/reset-password \
+  -v /private/new-password:/run/secrets/reset-password:ro isla --reset-admin
+```
+
+The command resets and re-enables the existing administrator and revokes all of their sessions. Supply `DataDirectory` when using a custom location, ensure the process user can read the password file, and remove that file afterwards. Members ask an administrator to reset their passwords. No email service is required.
+
+For operator-managed mounted configuration, set `ISLA_CONFIG_FILE` to a read-only, restricted JSON file outside the web root, for example `{"DataDirectory":"/app/data","Setup":{"TokenFile":"/run/secrets/isla-setup-token"}}`. Environment variables and command-line arguments override that file. These storage settings are read-only in the UI and changes require a restart. Credentials must stay in restricted files or injected environment secrets.
+
+SQLite, MongoDB, PostgreSQL and SQL Server are future stages and cannot be selected yet.
 
 ## Goods and extra shopping
 
@@ -163,7 +208,7 @@ dotnet test ISLA.sln -c Release
 node tests/browser/shopping-mode.test.mjs
 ```
 
-The .NET suite covers purchase persistence, optional prices, price validation, future estimates, metric scaling, actual-price precedence, week isolation, and Pantry exclusion. The JavaScript suite checks mode persistence, clearing the preference on exit, and unavailable or malformed browser storage.
+The .NET suite covers purchase persistence and pricing, setup-token validation and setup races, legacy-data preservation, exclusive JSON ownership, authentication and revocation, fixed session expiry, role boundaries, export/import validation and round trips, operator password recovery, and HTTP recovery responses for missing or incompatible storage. The JavaScript suite checks mode persistence, clearing the preference on exit, and unavailable or malformed browser storage.
 
 In-store price fields restore actual purchased prices or the same saved-price estimates used by the summary. Unchecked price drafts (including intentionally cleared fields) are saved immediately in the browser for that week and measurement and restored after reopening. Drafts do not affect household price history or the estimate until the item is marked purchased; successfully purchasing replaces the browser draft with the saved server price.
 

@@ -1,5 +1,6 @@
+@using Microsoft.AspNetCore.Components.Authorization
 <nav class="bottom-navigation fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white" aria-label="Main navigation">
-    <div class="mx-auto grid max-w-xl grid-cols-4 gap-1 px-2 pt-2">
+    <div class="mx-auto grid max-w-xl grid-cols-5 gap-1 px-2 pt-2">
         <NavLink class="bottom-link" href="" Match="NavLinkMatch.All" aria-label="Weekly planner">
             <NavIcon Name="planner" />
             <span class="text-xs font-medium">Planner</span>
@@ -16,5 +17,58 @@
             <NavIcon Name="goods" />
             <span class="text-xs font-medium">Goods</span>
         </NavLink>
+        <AuthorizeView Context="auth">
+            <Authorized>
+                <div class="account-slot min-w-0">
+                    <button type="button" class="bottom-link account-trigger w-full" popovertarget="account-menu"
+                            aria-label="Account menu for @auth.User.Identity?.Name: settings and sign out" aria-haspopup="dialog">
+                        <span class="account-monogram" aria-hidden="true">@Monogram(auth.User.Identity?.Name ?? "")</span>
+                        <span class="flex items-center gap-1 text-xs font-medium">
+                            Account
+                            <svg class="size-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 10 4-4 4 4" /></svg>
+                        </span>
+                    </button>
+                    <div id="account-menu" class="account-menu" popover="auto" role="dialog" aria-labelledby="account-menu-name">
+                        <div class="flex items-center gap-3 border-b border-slate-200 px-4 py-4">
+                            <span class="account-monogram account-monogram-large" aria-hidden="true">@Monogram(auth.User.Identity?.Name ?? "")</span>
+                            <div class="min-w-0">
+                                <p class="text-xs text-slate-500">Signed in as</p>
+                                <p id="account-menu-name" class="truncate font-semibold">@auth.User.Identity?.Name</p>
+                                <p class="text-xs text-slate-600">@(auth.User.IsInRole("Administrator") ? "Administrator" : "Member")</p>
+                            </div>
+                        </div>
+                        <div class="p-2">
+                            @if (auth.User.IsInRole("Administrator"))
+                            {
+                                <NavLink class="account-menu-item" href="/settings" data-enhance-nav="false">
+                                    <span>Settings</span>
+                                    <span class="text-xs font-normal text-slate-500">Household, accounts and your password</span>
+                                </NavLink>
+                            }
+                            else if (auth.User.IsInRole("Member"))
+                            {
+                                <NavLink class="account-menu-item" href="/settings" data-enhance-nav="false">
+                                    <span>Account settings</span>
+                                    <span class="text-xs font-normal text-slate-500">Change your password</span>
+                                </NavLink>
+                            }
+                            <form method="post" action="/account/logout" data-enhance="false">
+                                <AntiforgeryToken />
+                                <button type="submit" class="account-menu-item w-full text-left">Sign out</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </Authorized>
+        </AuthorizeView>
     </div>
 </nav>
+
+@code {
+    private static string Monogram(string name)
+    {
+        var words = name.Split([' ', '.', '_', '-'], StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length == 0) return "?";
+        return (words.Length > 1 ? $"{words[0][0]}{words[^1][0]}" : string.Concat(words[0].Take(2))).ToUpperInvariant();
+    }
+}

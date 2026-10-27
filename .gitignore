@@ -45,3 +45,10 @@ GEMINI.md
 .github/instructions/
 .github/prompts/
 .github/agents/
+
+# Local deployment secrets and private runtime state
+secrets/
+**/identity.json
+**/installation.json
+**/*.pre-setup.bak
+**/keys/

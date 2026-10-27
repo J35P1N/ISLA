@@ -14,6 +14,8 @@ RUN dotnet restore src/ISLA/ISLA.csproj
 COPY src/ISLA/ src/ISLA/
 COPY --from=styles /source/wwwroot/app.css src/ISLA/wwwroot/app.css
 RUN dotnet publish src/ISLA/ISLA.csproj -c Release --no-restore -p:SkipTailwind=true -o /app/publish /p:UseAppHost=false
+# Fail the image build if the interactive UI's startup script was omitted.
+RUN test -s /app/publish/wwwroot/_framework/blazor.web.js
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app

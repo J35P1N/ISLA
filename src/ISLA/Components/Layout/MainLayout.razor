@@ -1,3 +1,4 @@
+@using Microsoft.AspNetCore.Components.Authorization
 @inherits LayoutComponentBase
 
 <a href="#main-content" class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-2 focus:z-50 focus:rounded-md focus:bg-white focus:p-3">Skip to content</a>
@@ -18,7 +19,7 @@
             @Body
         </article>
     </main>
-    <NavMenu />
+    <AuthorizeView><Authorized><NavMenu /></Authorized></AuthorizeView>
 </div>
 
 <div id="blazor-error-ui" class="fixed inset-x-0 top-0 z-50 hidden bg-amber-100 px-6 py-4 pr-12 text-amber-950" data-nosnippet>

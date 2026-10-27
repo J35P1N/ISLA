@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS styles
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS styles
 WORKDIR /source
 COPY src/ISLA/package*.json ./
 RUN npm ci --no-audit --no-fund
@@ -6,7 +6,7 @@ COPY src/ISLA/Components/ ./Components/
 COPY src/ISLA/Styles/ ./Styles/
 RUN npm run css:build
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /source
 COPY global.json ./
 COPY src/ISLA/ISLA.csproj src/ISLA/

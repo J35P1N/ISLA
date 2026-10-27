@@ -1,0 +1,229 @@
+@page "/recipes"
+@rendermode InteractiveServer
+@using ISLA.Models
+@using ISLA.Services
+@inject RecipeStore Store
+
+<PageTitle>Recipes | ISLA</PageTitle>
+
+<div class="page-intro flex flex-wrap items-center justify-between gap-4">
+    <div>
+        <p class="eyebrow">Tried, loved &amp; made again</p>
+        <h1 class="text-2xl sm:text-3xl font-bold tracking-tight">Recipes</h1>
+        <p class="mt-2 text-slate-600">Your household recipe collection, ready for the weekly shop.</p>
+    </div>
+    <button class="icon-button primary-button" @onclick="NewRecipe" aria-label="Add recipe" title="Add recipe"><ActionIcon Name="plus" /></button>
+</div>
+
+@if (error is not null)
+{
+    <Notification Message="@error" IsError="true" Dismissed="() => error = null" />
+}
+@if (notice is not null)
+{
+    <Notification @key="noticeVersion" Message="@notice" Dismissed="() => notice = null" />
+}
+
+@if (editing is not null)
+{
+    <section class="rounded-xl border border-slate-200 bg-white p-4 sm:p-6" aria-labelledby="recipe-editor">
+        <h2 id="recipe-editor" @ref="editorHeading" tabindex="-1" class="mb-6 text-xl font-semibold focus:outline-none">@(data.Recipes.Any(x => x.Id == editing.Id) ? "Edit recipe" : "New recipe")</h2>
+        <EditForm Model="editing" OnSubmit="Save">
+            <div class="grid gap-4 sm:grid-cols-2">
+                <label class="block font-medium">Recipe name
+                    <InputText @ref="recipeNameInput" class="field" @bind-Value="editing.Name" maxlength="200" />
+                </label>
+                <label class="block font-medium">Servings
+                    <InputNumber class="field" @bind-Value="editing.Servings" min="1" step="1" />
+                </label>
+            </div>
+            <fieldset class="mt-6 space-y-4">
+                <legend class="text-lg font-semibold">Ingredients</legend>
+                <p class="text-sm text-slate-600">Choose an existing food good or type a new ingredient. New ingredients are added to Goods as food. Use whole numbers for items; decimals such as 0.5 are allowed for measurements.</p>
+                <datalist id="known-ingredients">
+                    @foreach (var name in data.Goods.Where(x => x.IsFood).Select(x => x.Name).OrderBy(x => x))
+                    {
+                        <option value="@name"></option>
+                    }
+                </datalist>
+                @foreach (var ingredient in editing.Ingredients)
+                {
+                    <div @key="ingredient" class="grid items-end gap-3 rounded-lg bg-slate-50 p-4 sm:grid-cols-[2fr_1fr_1fr_auto]">
+                        <label class="block text-sm font-medium">Ingredient
+                            <InputText class="field" @bind-Value="ingredient.Name" list="known-ingredients" maxlength="200" />
+                        </label>
+                        <label class="block text-sm font-medium">Quantity
+                            <InputNumber class="field" @bind-Value="ingredient.Quantity" min="@(ingredient.Unit == "item" ? "1" : "0.001")" step="@(ingredient.Unit == "item" ? "1" : "any")" />
+                        </label>
+                        <label class="block text-sm font-medium">Measurement
+                            <InputSelect class="field" @bind-Value="ingredient.Unit">
+                                @foreach (var unit in CookingUnits.All)
+                                {
+                                    <option value="@unit">@(unit == "item" ? "Items (whole)" : unit)</option>
+                                }
+                            </InputSelect>
+                        </label>
+                        <button type="button" class="icon-button secondary-button" aria-label="Remove ingredient" @onclick="() => editing.Ingredients.Remove(ingredient)" title="Remove ingredient"><ActionIcon Name="trash" /></button>
+                    </div>
+                }
+                <button type="button" class="icon-button secondary-button" @onclick="() => editing.Ingredients.Add(new())" aria-label="Add ingredient" title="Add ingredient"><ActionIcon Name="plus" /></button>
+            </fieldset>
+            <label class="mt-6 block font-medium">Method / notes
+                <InputTextArea class="field min-h-40" @bind-Value="editing.Instructions" />
+            </label>
+            <div class="mt-6 flex gap-3">
+                <button type="submit" class="icon-button primary-button" aria-label="Save recipe" title="Save recipe"><ActionIcon Name="save" /></button>
+                <button type="button" class="icon-button secondary-button" @onclick="Cancel" aria-label="Cancel editing" title="Cancel editing"><ActionIcon Name="close" /></button>
+            </div>
+        </EditForm>
+    </section>
+}
+
+<label class="block max-w-md font-medium">Find a recipe
+    <input class="field" type="search" placeholder="Search by name or ingredient" @bind="search" @bind:event="oninput" />
+</label>
+
+@if (loading)
+{
+    <p role="status">Loading recipes…</p>
+}
+else if (data.Recipes.Count == 0)
+{
+    <div class="rounded-xl border border-dashed border-slate-300 p-10 text-center">
+        <h2 class="text-xl font-semibold">Start your recipe collection</h2>
+        <p class="mt-2 text-slate-600">Add a favourite meal and its ingredients. New ingredients will be available next time.</p>
+    </div>
+}
+else
+{
+    @if (!FilteredRecipes.Any())
+    {
+        <p>No recipes match your search.</p>
+    }
+    <div class="grid items-start gap-3 lg:grid-cols-2">
+        @foreach (var recipe in FilteredRecipes)
+        {
+            <details @key="recipe.Id" class="recipe-card group rounded-xl border border-slate-200">
+                <summary class="flex min-h-16 cursor-pointer list-none items-center justify-between gap-3 rounded-xl p-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 [&::-webkit-details-marker]:hidden">
+                    <div class="min-w-0">
+                        <h2 class="text-lg font-semibold">@recipe.Name</h2>
+                        <p class="mt-1 text-sm text-slate-500">Serves @recipe.Servings · @recipe.Ingredients.Count @(recipe.Ingredients.Count == 1 ? "ingredient" : "ingredients")</p>
+                    </div>
+                    <svg class="size-5 shrink-0 text-slate-500 transition-transform group-open:rotate-180 motion-reduce:transition-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
+                        <path d="m6 9 6 6 6-6" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                </summary>
+                <div class="border-t border-slate-100 px-4 pb-4">
+                <h3 class="mt-5 font-semibold">Ingredients</h3>
+                <ul class="mt-2 space-y-2">
+                    @foreach (var ingredient in recipe.Ingredients)
+                    {
+                        <li><span class="font-medium">@ingredient.Quantity.ToString("0.############################") @(ingredient.Unit == "item" ? "×" : ingredient.Unit)</span> @ingredient.Name</li>
+                    }
+                </ul>
+                @if (!string.IsNullOrWhiteSpace(recipe.Instructions))
+                {
+                    <h3 class="mt-5 font-semibold">Method / notes</h3>
+                    <p class="mt-2 whitespace-pre-wrap text-slate-700">@recipe.Instructions</p>
+                }
+                <div class="mt-6 flex flex-wrap gap-3">
+                    <button class="icon-button secondary-button" @onclick="() => Edit(recipe)" aria-label="Edit recipe" title="Edit recipe"><ActionIcon Name="edit" /></button>
+                    @if (deleteId == recipe.Id)
+                    {
+                        <span class="self-center text-sm">Delete this recipe and its planned meals?</span>
+                        <button class="icon-button secondary-button text-red-700" @onclick="() => Delete(recipe.Id)" aria-label="Confirm delete recipe" title="Confirm delete recipe"><ActionIcon Name="check" /></button>
+                        <button class="icon-button secondary-button" @onclick="() => deleteId = null" aria-label="Keep recipe" title="Keep recipe"><ActionIcon Name="close" /></button>
+                    }
+                    else
+                    {
+                        <button class="icon-button secondary-button text-red-700" @onclick="() => deleteId = recipe.Id" aria-label="Delete recipe" title="Delete recipe"><ActionIcon Name="trash" /></button>
+                    }
+                </div>
+                </div>
+            </details>
+        }
+    </div>
+}
+
+@code {
+    private RecipeData data = new();
+    private Recipe? editing;
+    private ElementReference editorHeading;
+    private InputText? recipeNameInput;
+    private bool focusEditor;
+    private Guid? deleteId;
+    private string search = "";
+    private string? error;
+    private string? noticeMessage;
+    private int noticeVersion;
+    private string? notice
+    {
+        get => noticeMessage;
+        set { noticeMessage = value; noticeVersion++; }
+    }
+    private bool loading = true;
+    private IEnumerable<Recipe> FilteredRecipes => data.Recipes
+        .Where(x => x.Name.Contains(search, StringComparison.OrdinalIgnoreCase) || x.Ingredients.Any(i => i.Name.Contains(search, StringComparison.OrdinalIgnoreCase)))
+        .OrderBy(x => x.Name);
+
+    protected override async Task OnInitializedAsync()
+    {
+        try { data = await Store.ReadAsync(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        { error = "Recipes could not be loaded. Check the application's data storage and try again."; }
+        finally { loading = false; }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (focusEditor && editing is not null && recipeNameInput?.Element is { } nameElement)
+        {
+            focusEditor = false;
+            // Wait for the form to render, reveal its heading, then focus the first field.
+            await editorHeading.FocusAsync();
+            await nameElement.FocusAsync(preventScroll: true);
+        }
+    }
+
+    private void NewRecipe() { editing = new() { Ingredients = [new()] }; error = notice = null; focusEditor = true; }
+    private void Cancel() { editing = null; error = null; focusEditor = false; }
+    private void Edit(Recipe recipe)
+    {
+        editing = new Recipe
+        {
+            Id = recipe.Id, Name = recipe.Name, Servings = recipe.Servings, Instructions = recipe.Instructions,
+            Ingredients = recipe.Ingredients.Select(i => new RecipeIngredient { Name = i.Name, Quantity = i.Quantity, Unit = i.Unit }).ToList()
+        };
+        error = notice = null;
+        focusEditor = true;
+    }
+    private async Task Save()
+    {
+        if (editing is null) return;
+        try
+        {
+            await Store.SaveAsync(editing);
+            data = await Store.ReadAsync();
+            editing = null;
+            error = null;
+            notice = "Recipe saved.";
+        }
+        catch (ArgumentException ex) { error = ex.Message; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        { error = "The recipe could not be saved. Your edits are still here; please try again."; }
+    }
+    private async Task Delete(Guid id)
+    {
+        try
+        {
+            await Store.DeleteAsync(id);
+            data = await Store.ReadAsync();
+            if (editing?.Id == id) editing = null;
+            deleteId = null;
+            error = null;
+            notice = "Recipe deleted. Its ingredients remain available for other recipes.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        { error = "The recipe could not be deleted. Please try again."; }
+    }
+}

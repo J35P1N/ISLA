@@ -1,0 +1,150 @@
+@page "/"
+@rendermode InteractiveServer
+@using ISLA.Models
+@using ISLA.Services
+@inject RecipeStore Store
+
+<PageTitle>Weekly planner | ISLA</PageTitle>
+<div class="page-intro flex flex-wrap items-center justify-between gap-4">
+    <div>
+        <p class="eyebrow">A little planning, a good week</p>
+        <h1 class="text-2xl sm:text-3xl font-bold tracking-tight">Weekly planner</h1>
+        <p class="mt-2 text-slate-600">Plan an evening meal for each day, then take the combined ingredients to the shops.</p>
+    </div>
+    <a class="primary-button" href="@($"shopping-list?week={MealPlanning.Key(week)}")">View shopping list</a>
+</div>
+<WeekNavigation Week="week" BasePath="/" />
+@if (error is not null)
+{
+    <Notification Message="@error" IsError="true" Dismissed="() => error = null" />
+}
+@if (notice is not null)
+{
+    <Notification @key="noticeVersion" Message="@notice" Dismissed="() => notice = null" />
+}
+@if (loading)
+{
+    <p role="status">Loading your week…</p>
+}
+else
+{
+    @if (data.Recipes.Count == 0)
+    {
+        <p class="rounded-lg border border-dashed border-slate-300 p-6">Add your first recipe in <a href="recipes" class="text-blue-700 underline">Recipes</a>, then come back to plan your meals.</p>
+    }
+    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        @for (var i = 0; i < 7; i++)
+        {
+            var day = week.AddDays(i);
+            <section @key="day" class="@($"day-card rounded-2xl border border-slate-200 p-5 {(day == MealPlanning.Today ? "today" : "")} {(data.Meals.Any(x => x.Date == day) ? "planned" : "")}")" aria-label="@day.ToString("dddd d MMMM")">
+                <div class="mb-4 flex items-center justify-between gap-3">
+                    <div>
+                        <p class="mb-1 text-xs uppercase tracking-widest text-slate-500">Evening meal</p>
+                        <h2 class="text-lg font-semibold">@day.ToString("dddd")</h2>
+                        @if (day == MealPlanning.Today)
+                        {
+                            <span class="mt-1 inline-block text-xs font-semibold text-blue-800">Today</span>
+                        }
+                    </div>
+                    <div class="date-stamp" aria-label="@day.ToString("d MMMM")"><strong>@day.Day</strong><span>@day.ToString("MMM")</span></div>
+                </div>
+                <ul class="mb-5 space-y-3">
+                    @foreach (var meal in data.Meals.Where(x => x.Date == day))
+                    {
+                        var recipe = data.Recipes.FirstOrDefault(x => x.Id == meal.RecipeId);
+                        <li @key="meal.Id" class="flex items-center justify-between gap-3 rounded-lg bg-slate-50 p-3">
+                            <div class="min-w-0"><p class="font-medium">@(recipe?.Name ?? "Unavailable recipe")</p>
+                            @if (recipe is not null) { <p class="text-sm text-slate-500">Serves @recipe.Servings</p> }
+                            @if (meal.LeftoversFromMealId is { } sourceId)
+                            {
+                                var source = data.Meals.FirstOrDefault(x => x.Id == sourceId);
+                                <p class="mt-2 text-xs font-medium text-blue-800">Leftovers@(source is null ? "" : $" from {source.Date:dddd}")</p>
+                            }
+                            </div>
+                            <button type="button" class="secondary-button min-w-11 shrink-0 px-3 text-red-700 disabled:opacity-50" aria-label="@($"Remove {recipe?.Name ?? "meal"} from {day:dddd}")" title="Remove evening meal" disabled="@busy" @onclick="() => Remove(meal.Id)"><ActionIcon Name="trash" /></button>
+                        </li>
+                    }
+                </ul>
+                @if (!data.Meals.Any(x => x.Date == day))
+                {
+                <p class="mb-5 text-sm text-slate-500">No evening meal planned.</p>
+                <label class="block text-sm font-medium" for="@($"recipe-{i}")">Choose a recipe
+                    <select id="@($"recipe-{i}")" class="field" @bind="choices[day]" @bind:after="() => Add(day)" disabled="@(busy || data.Recipes.Count == 0)">
+                        <option value="">Select recipe…</option>
+                        @foreach (var recipe in data.Recipes.OrderBy(x => x.Name))
+                        {
+                            <option value="@recipe.Id">@recipe.Name (serves @recipe.Servings)</option>
+                        }
+                    </select>
+                </label>
+                @if (Guid.TryParse(choices[day], out var selectedRecipe) && MealPlanning.PreviousCook(data, day, selectedRecipe) is { } earlierCook)
+                {
+                    <div class="mt-3 space-y-3 rounded-xl border border-slate-200 bg-blue-50 p-3">
+                        <p class="text-sm">Already cooking this on @earlierCook.Date.ToString("dddd"). Use leftovers or cook a fresh batch?</p>
+                        <div class="flex flex-wrap gap-2">
+                            <button type="button" class="primary-button" disabled="@busy" @onclick="() => Assign(day, earlierCook.Id)">Use leftovers</button>
+                            <button type="button" class="secondary-button" disabled="@busy" @onclick="() => Assign(day, null)">Cook fresh</button>
+                        </div>
+                    </div>
+                }
+                }
+            </section>
+        }
+    </div>
+    <p class="text-sm text-slate-500">Plan one evening meal per day. Fresh cooks add ingredients to your shopping list. Leftovers reuse an earlier cook from the same week.</p>
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "week")] public string? WeekQuery { get; set; }
+    private DateOnly week;
+    private RecipeData data = new();
+    private readonly Dictionary<DateOnly, string> choices = [];
+    private bool loading = true;
+    private bool busy;
+    private string? error;
+    private string? noticeMessage;
+    private int noticeVersion;
+    private string? notice
+    {
+        get => noticeMessage;
+        set { noticeMessage = value; noticeVersion++; }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        week = MealPlanning.Week(WeekQuery);
+        for (var i = 0; i < 7; i++) choices.TryAdd(week.AddDays(i), "");
+        loading = true;
+        try { data = await Store.ReadAsync(); error = null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        { error = "Your meal plan could not be loaded. Please try again."; }
+        finally { loading = false; }
+    }
+
+    private async Task Add(DateOnly day)
+    {
+        if (!Guid.TryParse(choices[day], out var recipeId)) return;
+        if (MealPlanning.PreviousCook(data, day, recipeId) is not null) return;
+        await Assign(day, null);
+    }
+    private async Task Assign(DateOnly day, Guid? sourceId)
+    {
+        if (!Guid.TryParse(choices[day], out var recipeId)) return;
+        await Update(async () => { await Store.AddMealAsync(day, recipeId, sourceId); choices[day] = ""; }, sourceId is null ? "Meal added." : "Leftovers planned. No extra ingredients added.");
+    }
+    private Task Remove(Guid id) => Update(() => Store.RemoveMealAsync(id),
+        data.Meals.Any(x => x.LeftoversFromMealId == id)
+            ? "Meal removed. The first leftover meal is now a fresh cook so its ingredients stay on the shopping list."
+            : "Meal removed.");
+    private async Task Update(Func<Task> action, string message)
+    {
+        if (busy) return;
+        busy = true;
+        notice = null;
+        try { await action(); data = await Store.ReadAsync(); error = null; notice = message; }
+        catch (ArgumentException ex) { error = ex.Message; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        { error = "Your meal plan could not be saved. Please try again."; }
+        finally { busy = false; }
+    }
+}

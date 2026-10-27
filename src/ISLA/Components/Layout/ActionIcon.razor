@@ -1,0 +1,18 @@
+<svg class="size-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    <path d="@Path" />
+</svg>
+
+@code {
+    [Parameter] public string Name { get; set; } = "plus";
+    private string Path => Name switch
+    {
+        "trash" => "M3 6h18M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M5 6l1 14a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1l1-14M10 10v7M14 10v7",
+        "save" => "M5 3h12l4 4v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2ZM7 3v6h10V3M7 21v-8h10v8",
+        "edit" => "m15 5 4 4M4 20l5-1L21 7a2.8 2.8 0 0 0-4-4L5 15l-1 5Z",
+        "close" => "m6 6 12 12M6 18 18 6",
+        "check" => "m5 12 4 4L19 6",
+        "left" => "m14 5-7 7 7 7",
+        "right" => "m10 5 7 7-7 7",
+        _ => "M12 5v14M5 12h14"
+    };
+}

@@ -1,0 +1,13 @@
+@using ISLA.Services
+<nav class="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center sm:gap-3" aria-label="Week navigation">
+    <h2 class="col-span-2 text-base font-semibold sm:text-lg">@Week.ToString("d MMM yyyy") – @Week.AddDays(6).ToString("d MMM yyyy")</h2>
+    <a class="secondary-button icon-button" href="@Link(Week.AddDays(-7))" aria-label="Previous week" title="Previous week"><ActionIcon Name="left" /></a>
+    <a class="secondary-button icon-button" href="@Link(Week.AddDays(7))" aria-label="Next week" title="Next week"><ActionIcon Name="right" /></a>
+    <a class="col-span-2 inline-flex min-h-11 items-center justify-center text-blue-700 underline sm:px-3" href="@Link(MealPlanning.Monday(MealPlanning.Today))">This week</a>
+</nav>
+
+@code {
+    [Parameter, EditorRequired] public DateOnly Week { get; set; }
+    [Parameter, EditorRequired] public string BasePath { get; set; } = "/";
+    private string Link(DateOnly date) => $"{BasePath}?week={MealPlanning.Key(date)}";
+}

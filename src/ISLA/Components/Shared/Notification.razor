@@ -1,0 +1,42 @@
+@implements IDisposable
+
+<div class="app-notification @(IsError ? "notification-error" : "notification-success")" role="@(IsError ? "alert" : "status")" aria-atomic="true">
+    <span class="notification-icon" aria-hidden="true">
+        <ActionIcon Name="@(IsError ? "close" : "check")" />
+    </span>
+    <p class="min-w-0 flex-1 text-sm font-medium">@Message</p>
+    <button type="button" class="notification-dismiss" aria-label="Dismiss notification" title="Dismiss notification" @onclick="Dismissed">
+        <ActionIcon Name="close" />
+    </button>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Message { get; set; } = "";
+    [Parameter] public bool IsError { get; set; }
+    [Parameter] public EventCallback Dismissed { get; set; }
+    private readonly CancellationTokenSource lifetime = new();
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender && !IsError) _ = DismissLaterAsync(lifetime.Token);
+    }
+
+    private async Task DismissLaterAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(4.5), cancellationToken);
+            await InvokeAsync(async () =>
+            {
+                if (!cancellationToken.IsCancellationRequested) await Dismissed.InvokeAsync();
+            });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+    }
+
+    public void Dispose()
+    {
+        lifetime.Cancel();
+        lifetime.Dispose();
+    }
+}

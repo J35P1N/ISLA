@@ -1,0 +1,72 @@
+@page "/goods"
+@rendermode InteractiveServer
+@using ISLA.Models
+@using ISLA.Services
+@inject RecipeStore Store
+
+<PageTitle>Goods | ISLA</PageTitle>
+<div class="page-intro">
+    <p class="eyebrow">The pantry &amp; a little more</p>
+<h1 class="text-2xl sm:text-3xl font-bold tracking-tight">Goods</h1>
+<p class="text-slate-600">Your shared catalogue of food and household goods. Quantities belong to recipes and shopping lists.</p>
+</div>
+@if (error is not null) { <Notification Message="@error" IsError="true" Dismissed="() => error = null" /> }
+@if (notice is not null) { <Notification @key="noticeVersion" Message="@notice" Dismissed="() => notice = null" /> }
+<section class="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
+    <h2 class="mb-4 text-xl font-semibold">Add a good</h2>
+    <form @onsubmit="Add" @onsubmit:preventDefault>
+        <label class="block font-medium">Name<input class="field" @bind="name" maxlength="200" required /></label>
+        <label class="mt-4 block font-medium">Category
+            <select class="field" @bind="category"><option value="food">Food (available in recipes)</option><option value="non-food">Non-food (shopping only)</option></select>
+        </label>
+        <button class="icon-button primary-button mt-4" disabled="@busy" aria-label="Save good" title="Save good"><ActionIcon Name="save" /></button>
+    </form>
+</section>
+<label class="block max-w-md font-medium">Find goods<input class="field" type="search" @bind="search" @bind:event="oninput" /></label>
+@if (loading) { <p role="status">Loading goods…</p> }
+else if (data.Goods.Count == 0) { <p>No goods yet. Add one here or save a recipe to create its food goods.</p> }
+else
+{
+    <ul class="space-y-3">
+        @foreach (var good in data.Goods.Where(g => g.Name.Contains(search, StringComparison.OrdinalIgnoreCase)).OrderBy(g => g.Name))
+        {
+            <li @key="good.Id" class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4">
+                <div><span class="font-semibold">@good.Name</span><span class="ml-3 rounded-full bg-slate-100 px-3 py-1 text-sm">@(good.IsFood ? "Food" : "Non-food")</span></div>
+                <button class="secondary-button" disabled="@busy" @onclick="() => Change(good)">Mark as @(good.IsFood ? "non-food" : "food")</button>
+            </li>
+        }
+    </ul>
+}
+<p class="text-sm text-slate-500">Non-food goods never appear in recipe ingredient suggestions. Goods used in recipes must remain food until removed from those recipes.</p>
+
+@code {
+    private RecipeData data = new();
+    private string name = "", search = "";
+    private string category = "food";
+    private bool busy, loading = true;
+    private string? error;
+    private string? noticeMessage;
+    private int noticeVersion;
+    private string? notice
+    {
+        get => noticeMessage;
+        set { noticeMessage = value; noticeVersion++; }
+    }
+    protected override async Task OnInitializedAsync()
+    {
+        try { data = await Store.ReadAsync(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { error = "Goods could not be loaded. Please try again."; }
+        finally { loading = false; }
+    }
+    private Task Add() => Save(name, category == "food");
+    private Task Change(Good good) => Save(good.Name, !good.IsFood);
+    private async Task Save(string value, bool food)
+    {
+        if (busy) return;
+        busy = true; notice = null;
+        try { await Store.SaveGoodAsync(value, food); data = await Store.ReadAsync(); name = ""; error = null; notice = "Goods catalogue saved."; }
+        catch (ArgumentException ex) { error = ex.Message; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { error = "The good could not be saved. Please try again."; }
+        finally { busy = false; }
+    }
+}

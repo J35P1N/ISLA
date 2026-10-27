@@ -1,0 +1,386 @@
+@page "/shopping-list"
+@rendermode InteractiveServer
+@using ISLA.Models
+@using ISLA.Services
+@inject RecipeStore Store
+@inject IJSRuntime JS
+@inject NavigationManager Navigation
+@implements IAsyncDisposable
+
+<PageTitle>Shopping list | ISLA</PageTitle>
+<div class="@(inStore ? "flex flex-wrap items-center justify-between gap-3" : "page-intro flex flex-wrap items-center justify-between gap-4")">
+    <div>
+        @if (!inStore) { <p class="eyebrow">From the kitchen to the basket</p> }
+        <h1 class="text-2xl sm:text-3xl font-bold tracking-tight">Shopping list</h1>
+        @if (!inStore) { <p class="mt-2 text-slate-600">Recipe ingredients and extra food or household goods for this week.</p> }
+        else { <p class="text-sm text-slate-500">@week.ToString("d MMM") · @purchasedItems.Count of @(items.Count + purchasedItems.Count) picked up</p> }
+    </div>
+    @if (!inStore) { <a class="secondary-button" href="@($"/?week={MealPlanning.Key(week)}")">Back to planner</a> }
+</div>
+@if (modeReady && !inStore) { <WeekNavigation Week="week" BasePath="/shopping-list" /> }
+@if (!loading && modeReady)
+{
+    <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4">
+        <div>
+            <p class="text-xs uppercase tracking-widest text-slate-500">@(estimate.PricedItems < estimate.TotalItems ? "Estimated total · partial" : "Estimated total")</p>
+            <p class="font-display text-2xl">@Pounds(estimate.Total)</p>
+            <p class="text-xs text-slate-500">@estimate.PricedItems of @estimate.TotalItems items priced · excludes Pantry</p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+            @if (!inStore)
+            {
+                <button type="button" role="switch" aria-checked="@(checkStock ? "true" : "false")" aria-label="Check stock mode" class="@(checkStock ? "primary-button gap-2" : "secondary-button gap-2")" disabled="@busy" @onclick="() => checkStock = !checkStock">
+                    <ActionIcon Name="check" /><span>@(checkStock ? "Done" : "Check stock")</span>
+                </button>
+            }
+            <button type="button" class="primary-button gap-2" disabled="@busy" @onclick="ToggleStore"><NavIcon Name="shopping" /><span>@(inStore ? "Finish shopping" : "In-store mode")</span></button>
+        </div>
+    </div>
+}
+@if (inStore && error is not null) { <Notification Message="@error" IsError="true" Dismissed="() => error = null" /> }
+@if (inStore && modeReady && !loading)
+{
+    <section aria-label="In-store checklist" class="space-y-3">
+        <p class="text-xs text-slate-500">Total price for the row, in pounds and pence. Saved estimates are prefilled; adjust and tick to save.</p>
+        @if (storeItems.Count == 0) { <p class="rounded-xl border border-slate-200 p-4">Nothing to pick up. Items already in stock are in Pantry.</p> }
+        <ul class="divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white">
+            @foreach (var item in storeItems)
+            {
+                var bought = MealPlanning.Purchased(data, week, item) is not null;
+                var key = (item.Name, item.Unit);
+                <li @key="key" class="flex flex-wrap items-center gap-3 p-3">
+                    <label class="flex min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-3">
+                        <input type="checkbox" class="size-6 shrink-0 accent-blue-700" @bind:get="bought" @bind:set="value => PurchaseItem(item, value)" disabled="@busy" />
+                        <span class="min-w-0 @(bought ? "line-through text-slate-500" : "")"><span class="block font-medium">@item.Name</span><span class="text-sm text-slate-500">@Amount(item)</span></span>
+                    </label>
+                    <label class="ml-auto block w-28 shrink-0 text-xs text-slate-500">Price (£)
+                        <input class="field tabular-nums" type="number" inputmode="decimal" min="0" step="0.01" placeholder="Optional" data-shopping-price data-week="@MealPlanning.Key(week)" data-good-name="@item.Name" data-unit="@item.Unit" @bind="rowPrices[key]" @bind:event="oninput" disabled="@(busy || bought)" aria-label="@($"Total price in pounds for {item.Name} ({item.Unit})")" />
+                    </label>
+                </li>
+            }
+        </ul>
+    </section>
+}
+@if (!inStore)
+{
+@if (modeReady && !loading && !checkStock)
+{
+    <section class="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
+        <h2 class="text-xl font-semibold">Add extra shopping</h2>
+        <p class="mt-2 text-sm text-slate-600">Choose an existing good or create a new food or household item here.</p>
+        <div class="mt-4 grid grid-cols-2 gap-2">
+            <button type="button" class="secondary-button" aria-pressed="@(!creatingGood)" disabled="@busy" @onclick="() => creatingGood = false">Existing good</button>
+            <button type="button" class="secondary-button" aria-pressed="@creatingGood" disabled="@busy" @onclick="() => creatingGood = true">Create new good</button>
+        </div>
+        <form class="mt-4 grid items-end gap-4 sm:grid-cols-2 lg:grid-cols-4" @onsubmit="AddExtra" @onsubmit:preventDefault>
+            @if (creatingGood)
+            {
+                <label class="block font-medium">New good name
+                    <input class="field" @bind="newGoodName" maxlength="200" required disabled="@busy" />
+                </label>
+                <label class="block font-medium">Category
+                    <select class="field" @bind="newGoodCategory" disabled="@busy">
+                        <option value="food">Food (available in recipes)</option>
+                        <option value="non-food">Non-food (shopping only)</option>
+                    </select>
+                </label>
+            }
+            else
+            {
+            <label class="block font-medium">Good
+                <select class="field" @bind="selectedGood" required>
+                    <option value="">Choose a good…</option>
+                    @foreach (var good in data.Goods.OrderBy(g => g.Name))
+                    { <option value="@good.Id">@good.Name (@(good.IsFood ? "food" : "non-food"))</option> }
+                </select>
+            </label>
+            }
+            <label class="block font-medium">Quantity<input class="field" type="number" @bind="quantity" min="@(unit == "item" ? "1" : "0.001")" step="@(unit == "item" ? "1" : "any")" required /></label>
+            <label class="block font-medium">Measurement
+                <select class="field" @bind="unit">
+                    @foreach (var measurement in CookingUnits.All) { <option value="@measurement">@(measurement == "item" ? "Items (whole)" : measurement)</option> }
+                </select>
+            </label>
+            <button class="primary-button icon-button" disabled="@(busy || (creatingGood ? string.IsNullOrWhiteSpace(newGoodName) : string.IsNullOrEmpty(selectedGood)))" aria-label="@(creatingGood ? "Create good and add to list" : "Add to list")" title="@(creatingGood ? "Create good and add to list" : "Add to list")"><ActionIcon Name="plus" /></button>
+        </form>
+    </section>
+}
+@if (notice is not null) { <Notification @key="noticeVersion" Message="@notice" Dismissed="() => notice = null" /> }
+@if (error is not null)
+{
+    <Notification Message="@error" IsError="true" Dismissed="() => error = null" />
+}
+else if (loading || !modeReady)
+{
+    <p role="status">Loading shopping list…</p>
+}
+else if (items.Count == 0)
+{
+    <div class="rounded-xl border border-dashed border-slate-300 p-8">
+        <h2 class="text-xl font-semibold">@(purchasedItems.Count > 0 ? "Everything picked up" : pantryItems.Count > 0 ? "Everything is in the pantry" : "Nothing to buy yet")</h2>
+        <p class="mt-2 text-slate-600">@(purchasedItems.Count > 0 ? "Purchased items are listed below." : pantryItems.Count > 0 ? "All items for this week are marked as in stock." : "Plan meals or add extra goods to create your shopping list.")</p>
+    </div>
+}
+else
+{
+    <section aria-label="Shopping items" class="space-y-3">
+        <p class="text-sm text-slate-600">@mealCount planned meals · @items.Count shopping entries</p>
+        <ul class="space-y-3">
+            @foreach (var item in items)
+            {
+                var rowKey = (item.Name, item.Unit);
+                var formId = $"quantity-{items.ToList().IndexOf(item)}";
+                <li @key="rowKey" class="@(checkStock ? "shopping-row flex min-w-0 items-center justify-between gap-3 rounded-xl border border-slate-200 p-4" : "shopping-row grid min-w-0 grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center")">
+                    @if (checkStock)
+                    {
+                        <div class="min-w-0">
+                            <h2 class="font-semibold">@item.Name</h2>
+                            <p class="text-sm tabular-nums text-slate-600">@Amount(item)</p>
+                        </div>
+                        <button type="button" class="secondary-button shrink-0 gap-2" disabled="@busy" aria-label="@($"Mark {item.Name} ({item.Unit}) as in stock")" @onclick="() => SetStock(item, true)"><ActionIcon Name="check" /><span>In stock</span></button>
+                    }
+                    else
+                    {
+                    <h2 class="font-semibold">@item.Name</h2>
+                    <form id="@formId" class="grid min-w-0 grid-cols-[4rem_7rem_3rem] items-center gap-2" @onsubmit="() => SaveRow(item)" @onsubmit:preventDefault>
+                        <label class="text-sm text-slate-600" for="@($"input-{formId}")">Quantity</label>
+                        <input id="@($"input-{formId}")" class="field tabular-nums" type="number" inputmode="@(item.Unit == "item" ? "numeric" : "decimal")" aria-label="@($"Quantity for {item.Name} ({item.Unit})")" @bind="rowQuantities[rowKey]" min="@(item.Unit == "item" ? "1" : "0.001")" step="@(item.Unit == "item" ? "1" : "any")" required disabled="@busy" />
+                        <span class="whitespace-nowrap text-sm text-slate-600">@(item.Unit == "item" ? "items" : item.Unit)</span>
+                    </form>
+                    <div class="flex gap-2">
+                        <button type="submit" form="@formId" class="icon-button secondary-button" disabled="@busy" aria-label="Save quantity" title="Save quantity"><ActionIcon Name="save" /></button>
+                        <button type="button" class="secondary-button min-w-11 px-3 text-red-700" title="Remove item" aria-label="@($"Remove {item.Name} ({item.Unit})")" disabled="@busy" @onclick="() => RemoveRow(item)"><ActionIcon Name="trash" /></button>
+                    </div>
+                    }
+                </li>
+            }
+        </ul>
+    </section>
+    @if (!checkStock)
+    {
+    <p class="text-sm text-slate-500">Totals use the full recipe quantities for fresh cooks. Leftover meals add no extra ingredients. Saved row quantities and removals apply only to this week; recipes are unchanged. Kilograms are combined as grams and litres as millilitres. Other measurements stay separate.</p>
+    }
+}
+
+@if (!loading && pantryItems.Count > 0)
+{
+    <section class="rounded-xl border border-slate-200 bg-slate-100/50 p-4" aria-labelledby="pantry-heading">
+        <div class="mb-2 flex items-baseline justify-between gap-3"><h2 id="pantry-heading" class="font-semibold">Pantry</h2><span class="text-xs text-slate-500">@pantryItems.Count in stock</span></div>
+        <p class="mb-3 text-xs text-slate-600">Already at home · excluded from this week's shopping.</p>
+        <ul class="divide-y divide-slate-200">
+            @foreach (var item in pantryItems)
+            {
+                <li @key="(item.Name, item.Unit)" class="flex items-center justify-between gap-3 py-2">
+                    <div class="min-w-0"><p class="text-sm font-medium">@item.Name</p><p class="text-xs text-slate-500">@Amount(item)</p></div>
+                    <button type="button" class="secondary-button icon-button" disabled="@busy" aria-label="@($"Return {item.Name} ({item.Unit}) to shopping list")" title="Return to shopping list" @onclick="() => SetStock(item, false)"><ActionIcon Name="plus" /></button>
+                </li>
+            }
+        </ul>
+    </section>
+}
+
+@if (!loading && purchasedItems.Count > 0)
+{
+    <section class="rounded-xl border border-slate-200 bg-white p-4" aria-labelledby="purchased-heading">
+        <h2 id="purchased-heading" class="mb-2 font-semibold">Purchased <span class="text-xs font-normal text-slate-500">@purchasedItems.Count picked up</span></h2>
+        <ul class="divide-y divide-slate-200">
+            @foreach (var item in purchasedItems)
+            {
+                var purchase = MealPlanning.Purchased(data, week, item)!;
+                <li @key="(item.Name, item.Unit)" class="flex items-center justify-between gap-3 py-2">
+                    <div class="min-w-0"><p class="text-sm font-medium line-through text-slate-500">@item.Name</p><p class="text-xs text-slate-500">@Amount(item) @(purchase.TotalPrice is { } price ? $"· {Pounds(price)}" : "")</p></div>
+                    <button type="button" class="secondary-button icon-button" title="Return to shopping list" aria-label="@($"Mark {item.Name} ({item.Unit}) as not purchased")" disabled="@busy" @onclick="() => PurchaseItem(item, false)"><ActionIcon Name="plus" /></button>
+                </li>
+            }
+        </ul>
+    </section>
+}
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "week")] public string? WeekQuery { get; set; }
+    private DateOnly week;
+    private IReadOnlyList<ShoppingItem> items = [];
+    private IReadOnlyList<ShoppingItem> pantryItems = [];
+    private bool checkStock, inStore, modeReady;
+    private DateOnly? priceWeek;
+    private IReadOnlyList<ShoppingItem> storeItems = [], purchasedItems = [];
+    private ShoppingEstimate estimate = new(0, 0, 0);
+    private readonly Dictionary<(string Name, string Unit), decimal?> rowPrices = [];
+    private IJSObjectReference? modeModule;
+    private static string Pounds(decimal value) => value.ToString("C2", System.Globalization.CultureInfo.GetCultureInfo("en-GB"));
+    private RecipeData data = new();
+    private readonly Dictionary<(string Name, string Unit), decimal> rowQuantities = [];
+    private string selectedGood = "", unit = "item";
+    private decimal quantity = 1;
+    private bool busy, creatingGood;
+    private string newGoodName = "";
+    private string newGoodCategory = "non-food";
+    private string? noticeMessage;
+    private int noticeVersion;
+    private string? notice
+    {
+        get => noticeMessage;
+        set { noticeMessage = value; noticeVersion++; }
+    }
+    private int mealCount;
+    private bool loading = true;
+    private string? error;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        week = MealPlanning.Week(WeekQuery);
+        if (priceWeek != week) { rowPrices.Clear(); priceWeek = week; }
+        try
+        {
+            data = await Store.ReadAsync();
+            var allItems = MealPlanning.ShoppingList(data, week, includePantry: true);
+            storeItems = allItems.Where(x => !MealPlanning.InStock(data, week, x)).ToList();
+            purchasedItems = storeItems.Where(x => MealPlanning.Purchased(data, week, x) is not null).ToList();
+            items = storeItems.Where(x => MealPlanning.Purchased(data, week, x) is null).ToList();
+            estimate = MealPlanning.Estimate(data, week);
+            foreach (var item in storeItems)
+            {
+                var key = (item.Name, item.Unit);
+                var purchase = MealPlanning.Purchased(data, week, item);
+                if (purchase is not null) rowPrices[key] = MealPlanning.PriceFor(data, week, item);
+                else rowPrices.TryAdd(key, MealPlanning.PriceFor(data, week, item));
+            }
+            await RestorePriceDraftsAsync();
+            pantryItems = allItems.Where(x => MealPlanning.InStock(data, week, x)).ToList();
+            rowQuantities.Clear();
+            foreach (var item in items) rowQuantities[(item.Name, item.Unit)] = item.Quantity;
+            mealCount = data.Meals.Count(x => x.Date >= week && x.Date < week.AddDays(7) && data.Recipes.Any(r => r.Id == x.RecipeId));
+            error = null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        { error = "The shopping list could not be loaded. Please try again."; }
+        finally { loading = false; }
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        try
+        {
+            modeModule = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Pages/ShoppingList.razor.js");
+            await modeModule.InvokeVoidAsync("watchPriceInputs");
+            var savedWeek = await modeModule.InvokeAsync<string?>("readMode");
+            inStore = savedWeek is not null;
+            if (inStore && WeekQuery is null && MealPlanning.Week(savedWeek) != week)
+            {
+                modeReady = true;
+                Navigation.NavigateTo($"/shopping-list?week={MealPlanning.Key(MealPlanning.Week(savedWeek))}", replace: true);
+                return;
+            }
+            await RestorePriceDraftsAsync();
+        }
+        catch (JSDisconnectedException) { return; }
+        catch (JSException) { error = "The shopping mode preference could not be loaded in this browser."; }
+        modeReady = true;
+        StateHasChanged();
+    }
+    private async Task ToggleStore()
+    {
+        if (busy) return;
+        inStore = !inStore;
+        checkStock = false;
+        if (modeModule is not null)
+        {
+            try
+            {
+                if (!await modeModule.InvokeAsync<bool>("saveMode", inStore, MealPlanning.Key(week)))
+                    error = "Browser storage is unavailable; shopping mode will not be remembered.";
+            }
+            catch (JSDisconnectedException) { }
+            catch (JSException) { error = "Shopping mode could not be remembered by this browser."; }
+        }
+    }
+    private Task PurchaseItem(ShoppingItem item, bool purchased) => Update(async () =>
+    {
+        await Store.SetPurchasedAsync(week, item.Name, item.Unit, purchased, purchased ? rowPrices.GetValueOrDefault((item.Name, item.Unit)) : null);
+        if (purchased && modeModule is not null)
+        {
+            try { await modeModule.InvokeVoidAsync("clearPriceDraft", MealPlanning.Key(week), item.Name, item.Unit); }
+            catch (JSException) { }
+        }
+    });
+
+    public sealed class PriceDraft
+    {
+        public string Name { get; set; } = "";
+        public string Unit { get; set; } = "";
+        public string Value { get; set; } = "";
+    }
+
+    private async Task RestorePriceDraftsAsync()
+    {
+        if (modeModule is null) return;
+        var targetWeek = week;
+        try
+        {
+            var drafts = await modeModule.InvokeAsync<PriceDraft[]>("readPriceDrafts", MealPlanning.Key(targetWeek));
+            if (week != targetWeek) return;
+            foreach (var draft in drafts)
+            {
+                var item = storeItems.FirstOrDefault(x => x.Name == draft.Name && x.Unit == draft.Unit);
+                if (item is null || MealPlanning.Purchased(data, week, item) is not null) continue;
+                if (string.IsNullOrEmpty(draft.Value)) rowPrices[(item.Name, item.Unit)] = null;
+                else if (decimal.TryParse(draft.Value, System.Globalization.NumberStyles.AllowDecimalPoint, System.Globalization.CultureInfo.InvariantCulture, out var value) && value >= 0)
+                    rowPrices[(item.Name, item.Unit)] = value;
+            }
+        }
+        catch (JSException) { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (modeModule is not null)
+        {
+            try
+            {
+                await modeModule.InvokeVoidAsync("stopWatchingPriceInputs");
+                await modeModule.DisposeAsync();
+            }
+            catch (JSDisconnectedException) { }
+        }
+    }
+    private async Task AddExtra()
+    {
+        if (creatingGood)
+        {
+            await Update(async () =>
+            {
+                await Store.CreateGoodAndAddExtraAsync(week, newGoodName, newGoodCategory == "food", quantity, unit);
+                newGoodName = "";
+            });
+            return;
+        }
+        if (!Guid.TryParse(selectedGood, out var id)) return;
+        await Update(() => Store.AddExtraItemAsync(week, id, quantity, unit));
+    }
+    private static string Amount(ShoppingItem item) => $"{item.Quantity:0.############################} {(item.Unit == "item" ? "items" : item.Unit)}";
+    private Task SetStock(ShoppingItem item, bool inStock) => Update(() => Store.SetInStockAsync(week, item.Name, item.Unit, inStock));
+    private Task SaveRow(ShoppingItem item)
+    {
+        var value = rowQuantities[(item.Name, item.Unit)];
+        if (value <= 0) { error = "Enter a quantity greater than zero, or use Remove."; return Task.CompletedTask; }
+        return Update(() => Store.SetShoppingQuantityAsync(week, item.Name, item.Unit, value));
+    }
+    private Task RemoveRow(ShoppingItem item) => Update(() => Store.SetShoppingQuantityAsync(week, item.Name, item.Unit, 0));
+    private async Task Update(Func<Task> action)
+    {
+        if (busy) return;
+        busy = true; notice = null;
+        try
+        {
+            await action();
+            await OnParametersSetAsync();
+            if (error is null && !inStore) notice = "Shopping list updated.";
+        }
+        catch (ArgumentException ex) { error = ex.Message; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { error = "Your shopping changes could not be saved. Please try again."; }
+        finally { busy = false; }
+    }
+
+}

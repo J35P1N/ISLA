@@ -4,6 +4,34 @@
 
 .NET 10 Blazor Web App based on the standard template, with server interactivity and Tailwind CSS 4. The application has a dedicated Recipes section for managing a shared household recipe collection.
 
+## Screenshots
+
+Screenshots use sample household data.
+
+### Weekly planner
+
+Plan the week's evening meals and reuse leftovers from earlier cooks.
+
+![ISLA weekly planner showing planned meals and leftovers](docs/screenshots/weekly-planner.png)
+
+### Recipes
+
+Keep a shared collection of recipes and their ingredients.
+
+![ISLA recipe collection with sample household recipes](docs/screenshots/recipes.png)
+
+### Shopping list
+
+Combine recipe ingredients, check the pantry, and track estimated costs.
+
+![ISLA shopping list with quantities and price estimates](docs/screenshots/shopping-list.png)
+
+### In-store mode on mobile
+
+Tick off purchases and record prices while shopping.
+
+<img src="docs/screenshots/in-store-mobile.png" alt="ISLA mobile in-store checklist with price fields" width="360" />
+
 ## Layout
 
 ```text

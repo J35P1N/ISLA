@@ -1,0 +1,8 @@
+@inject ISLA.Security.SignInNavigation Navigation
+<p>Your session has ended. <a href="/login" data-enhance-nav="false">Sign in again</a>.</p>
+@code {
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await Navigation.GoToLoginAsync();
+    }
+}

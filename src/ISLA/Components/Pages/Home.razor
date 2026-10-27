@@ -1,8 +1,9 @@
+@attribute [Microsoft.AspNetCore.Authorization.Authorize]
 @page "/"
 @rendermode InteractiveServer
 @using ISLA.Models
 @using ISLA.Services
-@inject RecipeStore Store
+@inject IHouseholdService Store
 
 <PageTitle>Weekly planner | ISLA</PageTitle>
 <div class="page-intro flex flex-wrap items-center justify-between gap-4">

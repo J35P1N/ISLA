@@ -1,8 +1,9 @@
+@attribute [Microsoft.AspNetCore.Authorization.Authorize]
 @page "/goods"
 @rendermode InteractiveServer
 @using ISLA.Models
 @using ISLA.Services
-@inject RecipeStore Store
+@inject IHouseholdService Store
 
 <PageTitle>Goods | ISLA</PageTitle>
 <div class="page-intro">

@@ -1,28 +1,18 @@
-using System.Text.Json;
 using ISLA.Models;
 
 namespace ISLA.Services;
 
-// One application instance owns the file; serialize updates from both household users.
+// Household rules are independent of the configured persistence provider.
 public sealed class RecipeStore
 {
-    private readonly SemaphoreSlim gate = new(1, 1);
-    private readonly string path;
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private readonly IHouseholdPersistence persistence;
 
     public RecipeStore(IConfiguration configuration, IWebHostEnvironment environment)
-    {
-        var directory = configuration["DataDirectory"] ?? Path.Combine(environment.ContentRootPath, "App_Data");
-        Directory.CreateDirectory(directory);
-        path = Path.Combine(directory, "recipes.json");
-    }
+        : this(new JsonHouseholdPersistence(configuration, environment)) { }
 
-    public async Task<RecipeData> ReadAsync()
-    {
-        await gate.WaitAsync();
-        try { return await ReadFileAsync(); }
-        finally { gate.Release(); }
-    }
+    public RecipeStore(IHouseholdPersistence persistence) => this.persistence = persistence;
+
+    public Task<RecipeData> ReadAsync() => persistence.ReadAsync();
 
     public async Task SaveAsync(Recipe recipe)
     {
@@ -37,10 +27,8 @@ public sealed class RecipeStore
             if (ingredient.Unit == "item" && ingredient.Quantity != decimal.Truncate(ingredient.Quantity))
                 throw new ArgumentException("Individual items must have whole-number quantities.");
         }
-        await gate.WaitAsync();
-        try
+        await persistence.UpdateAsync(data =>
         {
-            var data = await ReadFileAsync();
             foreach (var ingredient in recipe.Ingredients)
             {
                 var existing = data.Goods.Find(x => x.Name.Equals(ingredient.Name, StringComparison.OrdinalIgnoreCase));
@@ -51,30 +39,24 @@ public sealed class RecipeStore
             }
             data.Recipes.RemoveAll(x => x.Id == recipe.Id);
             data.Recipes.Add(recipe);
-            await WriteFileAsync(data);
-        }
-        finally { gate.Release(); }
+            return data;
+        });
     }
 
     public async Task DeleteAsync(Guid id)
     {
-        await gate.WaitAsync();
-        try
+        await persistence.UpdateAsync(data =>
         {
-            var data = await ReadFileAsync();
             data.Recipes.RemoveAll(x => x.Id == id);
             data.Meals.RemoveAll(x => x.RecipeId == id);
-            await WriteFileAsync(data);
-        }
-        finally { gate.Release(); }
+            return data;
+        });
     }
 
     public async Task AddMealAsync(DateOnly date, Guid recipeId, Guid? leftoversFromMealId = null)
     {
-        await gate.WaitAsync();
-        try
+        await persistence.UpdateAsync(data =>
         {
-            var data = await ReadFileAsync();
             if (!data.Recipes.Any(x => x.Id == recipeId))
                 throw new ArgumentException("This recipe is no longer available. Refresh the page and choose another recipe.");
             if (data.Meals.Any(x => x.Date == date))
@@ -82,17 +64,14 @@ public sealed class RecipeStore
             if (leftoversFromMealId is not null && !data.Meals.Any(x => x.Id == leftoversFromMealId && x.RecipeId == recipeId && x.LeftoversFromMealId is null && x.Date >= MealPlanning.Monday(date) && x.Date < date))
                 throw new ArgumentException("Leftovers need a fresh cook of the same recipe earlier in this week. Refresh the planner and try again.");
             data.Meals.Add(new PlannedMeal { Date = date, RecipeId = recipeId, LeftoversFromMealId = leftoversFromMealId });
-            await WriteFileAsync(data);
-        }
-        finally { gate.Release(); }
+            return data;
+        });
     }
 
     public async Task RemoveMealAsync(Guid id)
     {
-        await gate.WaitAsync();
-        try
+        await persistence.UpdateAsync(data =>
         {
-            var data = await ReadFileAsync();
             data.Meals.RemoveAll(x => x.Id == id);
             // If the original cook is removed, the first remaining meal must supply the ingredients.
             var dependents = data.Meals.Where(x => x.LeftoversFromMealId == id).OrderBy(x => x.Date).ToList();
@@ -101,43 +80,36 @@ public sealed class RecipeStore
                 dependents[0].LeftoversFromMealId = null;
                 foreach (var meal in dependents.Skip(1)) meal.LeftoversFromMealId = dependents[0].Id;
             }
-            await WriteFileAsync(data);
-        }
-        finally { gate.Release(); }
+            return data;
+        });
     }
 
     public async Task SaveGoodAsync(string name, bool isFood)
     {
         name = name.Trim();
         if (name.Length == 0 || name.Length > 200) throw new ArgumentException("Enter a goods name of up to 200 characters.");
-        await gate.WaitAsync();
-        try
+        await persistence.UpdateAsync(data =>
         {
-            var data = await ReadFileAsync();
             var good = data.Goods.Find(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
             if (!isFood && data.Recipes.Any(r => r.Ingredients.Any(i => i.Name.Equals(name, StringComparison.OrdinalIgnoreCase))))
                 throw new ArgumentException("This good is used in a recipe. Remove it from those recipes before marking it as non-food.");
             if (good is null) data.Goods.Add(new Good { Name = name, IsFood = isFood });
             else good.IsFood = isFood;
-            await WriteFileAsync(data);
-        }
-        finally { gate.Release(); }
+            return data;
+        });
     }
 
     public async Task AddExtraItemAsync(DateOnly week, Guid goodId, decimal quantity, string unit)
     {
         if (quantity <= 0 || !CookingUnits.All.Contains(unit) || (unit == "item" && decimal.Truncate(quantity) != quantity))
             throw new ArgumentException("Enter a positive quantity; item counts must be whole numbers.");
-        await gate.WaitAsync();
-        try
+        await persistence.UpdateAsync(data =>
         {
-            var data = await ReadFileAsync();
             var good = data.Goods.Find(x => x.Id == goodId) ?? throw new ArgumentException("Choose a good from the catalogue.");
             data.ShoppingOverrides.RemoveAll(x => x.Week == MealPlanning.Monday(week) && x.Name.Equals(good.Name, StringComparison.OrdinalIgnoreCase) && x.Unit == MealPlanning.BaseUnit(unit));
             data.ExtraItems.Add(new ExtraShoppingItem { Week = MealPlanning.Monday(week), GoodId = goodId, Quantity = quantity, Unit = unit });
-            await WriteFileAsync(data);
-        }
-        finally { gate.Release(); }
+            return data;
+        });
     }
 
     public async Task CreateGoodAndAddExtraAsync(DateOnly week, string name, bool isFood, decimal quantity, string unit)
@@ -147,18 +119,15 @@ public sealed class RecipeStore
             throw new ArgumentException("Enter a goods name of up to 200 characters.");
         if (quantity <= 0 || !CookingUnits.All.Contains(unit) || (unit == "item" && decimal.Truncate(quantity) != quantity))
             throw new ArgumentException("Enter a positive quantity; item counts must be whole numbers.");
-        await gate.WaitAsync();
-        try
+        await persistence.UpdateAsync(data =>
         {
-            var data = await ReadFileAsync();
             if (data.Goods.Any(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
                 throw new ArgumentException("This good already exists. Choose it from the existing goods list.");
             var good = new Good { Name = name, IsFood = isFood };
             data.Goods.Add(good);
             data.ExtraItems.Add(new ExtraShoppingItem { Week = MealPlanning.Monday(week), GoodId = good.Id, Quantity = quantity, Unit = unit });
-            await WriteFileAsync(data);
-        }
-        finally { gate.Release(); }
+            return data;
+        });
     }
 
     public async Task SetShoppingQuantityAsync(DateOnly week, string name, string unit, decimal quantity)
@@ -166,35 +135,29 @@ public sealed class RecipeStore
         week = MealPlanning.Monday(week);
         if (quantity < 0 || !CookingUnits.All.Contains(unit) || (unit == "item" && quantity != decimal.Truncate(quantity)))
             throw new ArgumentException("Enter a positive quantity; item counts must be whole numbers.");
-        await gate.WaitAsync();
-        try
+        await persistence.UpdateAsync(data =>
         {
-            var data = await ReadFileAsync();
             if (!MealPlanning.ShoppingList(data, week, applyOverrides: false, includePantry: true).Any(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && x.Unit == unit))
                 throw new ArgumentException("This item is no longer on the list. Refresh the page and try again.");
             data.ShoppingOverrides.RemoveAll(x => x.Week == week && x.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && x.Unit == unit);
             data.ShoppingOverrides.Add(new ShoppingOverride { Week = week, Name = name, Unit = unit, Quantity = quantity });
-            await WriteFileAsync(data);
-        }
-        finally { gate.Release(); }
+            return data;
+        });
     }
 
     public async Task SetInStockAsync(DateOnly week, string name, string unit, bool inStock)
     {
         week = MealPlanning.Monday(week);
-        await gate.WaitAsync();
-        try
+        await persistence.UpdateAsync(data =>
         {
-            var data = await ReadFileAsync();
             var item = MealPlanning.ShoppingList(data, week, includePantry: true)
                 .FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && x.Unit == unit);
             if (item is null) throw new ArgumentException("This item is no longer on the list. Refresh the page and try again.");
             data.Pantry.RemoveAll(x => x.Week == week && x.Name.Equals(item.Name, StringComparison.OrdinalIgnoreCase) && x.Unit == unit);
             if (inStock) data.Purchases.RemoveAll(x => x.Week == week && x.Name.Equals(item.Name, StringComparison.OrdinalIgnoreCase) && x.Unit == unit);
             if (inStock) data.Pantry.Add(new PantryEntry { Week = week, Name = item.Name, Unit = unit });
-            await WriteFileAsync(data);
-        }
-        finally { gate.Release(); }
+            return data;
+        });
     }
 
     public async Task SetPurchasedAsync(DateOnly week, string name, string unit, bool purchased, decimal? totalPrice = null)
@@ -202,10 +165,8 @@ public sealed class RecipeStore
         week = MealPlanning.Monday(week);
         if (totalPrice is < 0 || (totalPrice is { } value && decimal.Round(value, 2) != value))
             throw new ArgumentException("Enter a price in pounds and pence, with no more than two decimal places.");
-        await gate.WaitAsync();
-        try
+        await persistence.UpdateAsync(data =>
         {
-            var data = await ReadFileAsync();
             var item = MealPlanning.ShoppingList(data, week).FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && x.Unit == unit);
             if (item is null) throw new ArgumentException("This item is no longer on the shopping list. Refresh and try again.");
             data.Purchases.RemoveAll(x => x.Week == week && x.Name.Equals(item.Name, StringComparison.OrdinalIgnoreCase) && x.Unit == unit);
@@ -218,53 +179,26 @@ public sealed class RecipeStore
                     data.Prices.Add(new GoodPrice { Name = item.Name, Unit = unit, Quantity = item.Quantity, TotalPrice = price });
                 }
             }
-            await WriteFileAsync(data);
-        }
-        finally { gate.Release(); }
+            return data;
+        });
     }
 
     public async Task ResetShoppingQuantitiesAsync(DateOnly week)
     {
-        await gate.WaitAsync();
-        try
+        await persistence.UpdateAsync(data =>
         {
-            var data = await ReadFileAsync();
             data.ShoppingOverrides.RemoveAll(x => x.Week == MealPlanning.Monday(week));
-            await WriteFileAsync(data);
-        }
-        finally { gate.Release(); }
+            return data;
+        });
     }
 
     public async Task RemoveExtraItemAsync(Guid id)
     {
-        await gate.WaitAsync();
-        try
+        await persistence.UpdateAsync(data =>
         {
-            var data = await ReadFileAsync();
             data.ExtraItems.RemoveAll(x => x.Id == id);
-            await WriteFileAsync(data);
-        }
-        finally { gate.Release(); }
+            return data;
+        });
     }
 
-    private async Task<RecipeData> ReadFileAsync()
-    {
-        if (!File.Exists(path)) return new();
-        await using var stream = File.OpenRead(path);
-        var data = await JsonSerializer.DeserializeAsync<RecipeData>(stream)
-            ?? throw new InvalidDataException("Recipe data could not be read.");
-        // Upgrade old ingredient catalogues without losing recipes or plans.
-        foreach (var name in data.Ingredients.Concat(data.Recipes.SelectMany(r => r.Ingredients).Select(i => i.Name)))
-            if (!data.Goods.Any(g => g.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
-                data.Goods.Add(new Good { Name = name });
-        data.Ingredients.Clear();
-        return data;
-    }
-
-    private async Task WriteFileAsync(RecipeData data)
-    {
-        var temporaryPath = path + ".tmp";
-        await File.WriteAllTextAsync(temporaryPath, JsonSerializer.Serialize(data, JsonOptions));
-        File.Move(temporaryPath, path, overwrite: true);
-    }
 }

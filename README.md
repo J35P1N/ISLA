@@ -52,7 +52,7 @@ Install Git, the .NET 10 SDK, and Node.js 24 LTS (including npm).
 Clone the repository:
 
 ```sh
-git clone https://github.com/J35P1N/ISLA---Indespensible-Shopping-List-Application.git ISLA
+git clone https://github.com/J35P1N/ISLA.git
 cd ISLA
 ```
 

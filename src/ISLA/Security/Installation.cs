@@ -28,11 +28,8 @@ public sealed class Installation : IDisposable
     {
         if (HasToken) return;
         token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        console.WriteLine();
         console.WriteLine("ISLA first-run setup token: " + token);
-        console.WriteLine("Enter this token on the Set up ISLA page to confirm you operate this server.");
-        console.WriteLine("This token is valid for this run only and stops working when setup completes.");
-        console.WriteLine();
+        console.WriteLine("Enter this token on the setup page. It expires when setup completes or this process restarts.");
     }
     public bool TokenMatches(string supplied) => !string.IsNullOrWhiteSpace(token) && CryptographicOperations.FixedTimeEquals(SHA256.HashData(Encoding.UTF8.GetBytes(token)), SHA256.HashData(Encoding.UTF8.GetBytes(supplied)));
     public bool HasToken => !string.IsNullOrWhiteSpace(token);
@@ -40,4 +37,4 @@ public sealed class Installation : IDisposable
 }
 
 public sealed class DataDirectoryInUseException(IOException innerException) : InvalidOperationException(
-    "Simple JSON mode requires exclusive access to DataDirectory. Stop the other ISLA process first.", innerException);
+    "JSON and SQLite storage require exclusive access to DataDirectory. Stop the other ISLA process first.", innerException);

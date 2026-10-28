@@ -13,7 +13,7 @@
         <h1 class="text-2xl sm:text-3xl font-bold tracking-tight">Recipes</h1>
         <p class="mt-2 text-slate-600">Your household recipe collection, ready for the weekly shop.</p>
     </div>
-    <button class="icon-button primary-button" @onclick="NewRecipe" aria-label="Add recipe" title="Add recipe"><ActionIcon Name="plus" /></button>
+    <button class="icon-button primary-button" @onclick="NewRecipe" disabled="@(!ready)" aria-label="Add recipe" title="Add recipe"><ActionIcon Name="plus" /></button>
 </div>
 
 @if (error is not null)
@@ -128,7 +128,7 @@ else
                     <p class="mt-2 whitespace-pre-wrap text-slate-700">@recipe.Instructions</p>
                 }
                 <div class="mt-6 flex flex-wrap gap-3">
-                    <button class="icon-button secondary-button" @onclick="() => Edit(recipe)" aria-label="Edit recipe" title="Edit recipe"><ActionIcon Name="edit" /></button>
+                    <button class="icon-button secondary-button" @onclick="() => Edit(recipe)" disabled="@(!ready)" aria-label="Edit recipe" title="Edit recipe"><ActionIcon Name="edit" /></button>
                     @if (deleteId == recipe.Id)
                     {
                         <span class="self-center text-sm">Delete this recipe and its planned meals?</span>
@@ -137,7 +137,7 @@ else
                     }
                     else
                     {
-                        <button class="icon-button secondary-button text-red-700" @onclick="() => deleteId = recipe.Id" aria-label="Delete recipe" title="Delete recipe"><ActionIcon Name="trash" /></button>
+                        <button class="icon-button secondary-button text-red-700" @onclick="() => deleteId = recipe.Id" disabled="@(!ready)" aria-label="Delete recipe" title="Delete recipe"><ActionIcon Name="trash" /></button>
                     }
                 </div>
                 </div>
@@ -151,7 +151,7 @@ else
     private Recipe? editing;
     private ElementReference editorHeading;
     private InputText? recipeNameInput;
-    private bool focusEditor;
+    private bool focusEditor, ready;
     private Guid? deleteId;
     private string search = "";
     private string? error;
@@ -177,6 +177,7 @@ else
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (firstRender) { ready = true; StateHasChanged(); }
         if (focusEditor && editing is not null && recipeNameInput?.Element is { } nameElement)
         {
             focusEditor = false;

@@ -13,7 +13,7 @@
     }
     else if (!Wizard.HasToken)
     {
-        <p>Restart ISLA and check the server console for the first-run setup token.</p>
+        <p>Restart ISLA and check the server console or Docker logs for the first-run setup token.</p>
     }
     else
     {
@@ -22,18 +22,24 @@
         <form @onsubmit="Next" @onsubmit:preventDefault>
             @if (step == 1)
             {
-                <p>Copy the first-run setup token printed in the terminal where ISLA is running. In Docker, find it in the application logs. This confirms you have access to the server.</p>
-                <p>If the operator supplied a token through configuration, use that token instead.</p>
-                <label>Operator setup token<input class="field" type="password" @bind="token" autocomplete="off" required /></label>
-            }
-            else if (step == 2)
-            {
-                <h2>Choose storage</h2>
-                <label class="block"><input type="radio" checked disabled /> Simple — JSON files</label>
-                <p>One running ISLA instance. Household data, accounts and browser sessions persist in the operator-configured data directory. In Docker, mount a persistent volume at /app/data.</p>
-                <p>SQLite and external databases will be available in later stages.</p>
+                <p>Enter the first-run setup token from the server console or Docker logs. If the operator supplied a token, use that instead.</p>
+                <p>Generated tokens are valid for this run only and stop working when setup completes. Operator-supplied tokens are never printed.</p>
+                <label>Operator setup token<input class="field" type="password" @bind="token" disabled="@(!ready)" autocomplete="off" required /></label>
             }
             else if (step == 3)
+            {
+                <h2>Choose storage</h2>
+                <label>Storage provider
+                    <select class="field" @bind="provider" disabled="@Wizard.StorageControlled">
+                        <option value="Json">Simple — JSON files</option>
+                        <option value="Sqlite">Medium — SQLite</option>
+                    </select>
+                </label>
+                @if (Wizard.StorageControlled) { <p>The operator controls the provider through deployment configuration.</p> }
+                <p>One running ISLA instance. Household data, accounts and browser sessions persist in the operator-configured data directory. In Docker, mount a persistent volume at /app/data.</p>
+                <p>SQLite stores household data, accounts and sessions in isla.db under the same mounted directory. Use a local Docker volume, never a network share, and run one application instance. Stop ISLA before backing up the complete directory.</p>
+            }
+            else if (step == 2)
             {
                 <h2>Create the administrator</h2>
                 <label>Username<input class="field" @bind="username" autocomplete="username" required maxlength="100" /></label>
@@ -44,15 +50,17 @@
             {
                 <h2>Review and initialise</h2>
                 <p>Administrator: <strong>@username</strong></p>
-                <p>Storage: Simple JSON. Existing household data will be kept, with a backup before setup completes.</p>
+                <p>Storage: @provider. Existing JSON household data will be kept when using JSON, with a backup before setup completes.</p>
                 <p>Everyone will need to sign in. You can create members in Settings.</p>
             }
-            <button class="primary-button mt-4" disabled="@(busy || !ready)">@(step == 4 ? "Initialise ISLA" : step == 2 ? "Validate storage and continue" : "Continue")</button>
+            <button class="primary-button mt-4" disabled="@(busy || !ready)">@(step == 4 ? "Initialise ISLA" : step == 3 ? "Validate storage and continue" : "Continue")</button>
         </form>
     }
 </div>
 @code {
     private int step = 1;
+    private string provider = "Json";
+    protected override void OnInitialized() => provider = Wizard.Provider;
     private string token = "", username = "", password = "", confirm = "";
     private string? error;
     private bool busy, ready, completed;
@@ -67,12 +75,12 @@
         try
         {
             if (step == 1 && !await Wizard.VerifyAsync(token)) throw new ArgumentException("Token rejected. Check the operator token or wait if too many attempts were made.");
-            if (step == 2) await Wizard.ValidateStorageAsync(token);
-            if (step == 3) { Accounts.Validate(username, password); if (password != confirm) throw new ArgumentException("Passwords do not match."); }
+            if (step == 3) await Wizard.ValidateStorageAsync(token, provider);
+            if (step == 2) { Accounts.Validate(username, password); if (password != confirm) throw new ArgumentException("Passwords do not match."); }
             if (step < 4) step++;
-            else { await Wizard.CompleteAsync(token, username, password); completed = true; password = confirm = token = ""; await Navigation.GoToLoginAsync(); }
+            else { await Wizard.CompleteAsync(token, username, password, provider); completed = true; password = confirm = token = ""; await Navigation.GoToLoginAsync(); }
         }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException) { error = ex is ArgumentException ? ex.Message : "Storage validation failed. Ask the operator to check the data directory and existing files."; }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException or InvalidOperationException) { error = ex is ArgumentException ? ex.Message : "Storage validation failed. Ask the operator to check the data directory and existing files."; }
         finally { busy = false; }
     }
 }

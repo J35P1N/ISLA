@@ -2,18 +2,28 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
 using ISLA.Services;
+using ISLA.Security;
+using ISLA.Storage;
+using ISLA.Models;
 using Xunit;
 
 namespace ISLA.Tests;
 
-public sealed class ShoppingPurchaseTests : IDisposable
+public abstract class ShoppingPurchaseTests(bool sqlite) : IDisposable
 {
     private readonly string directory = Path.Combine(Path.GetTempPath(), "isla-tests-" + Guid.NewGuid());
     private readonly DateOnly week = new(2026, 10, 26);
 
-    private RecipeStore Open() => new(
-        new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["DataDirectory"] = directory }).Build(),
-        new TestEnvironment());
+    private RecipeStore Open()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        { ["DataDirectory"] = directory, ["Storage:Provider"] = sqlite ? "Sqlite" : "Json" }).Build();
+        if (!sqlite) return new RecipeStore(config, new TestEnvironment());
+        using var installation = new Installation(config, new TestEnvironment());
+        var database = new SqliteStorage(new StorageConfiguration(installation, config));
+        database.InitializeAsync().GetAwaiter().GetResult();
+        return new RecipeStore(new SqliteHouseholdPersistence(database));
+    }
 
     private async Task<(RecipeStore Store, Guid GoodId)> Setup(decimal quantity = 2, string unit = "item")
     {
@@ -152,6 +162,47 @@ public sealed class ShoppingPurchaseTests : IDisposable
         Assert.Equal(0m, MealPlanning.PriceFor(await Open().ReadAsync(), week, item));
     }
 
+    [Fact]
+    public async Task RecipesLeftoversCatalogueAndShoppingMutationsHaveProviderParity()
+    {
+        var store = Open();
+        var recipe = new Recipe { Name = "Stew", Ingredients = [new() { Name = "Potato", Quantity = 2 }, new() { Name = "Carrot", Quantity = 3 }] };
+        await store.SaveAsync(recipe);
+        recipe.Instructions = "Simmer";
+        recipe.Ingredients.Reverse();
+        await store.SaveAsync(recipe);
+        var saved = Assert.Single((await Open().ReadAsync()).Recipes);
+        Assert.Equal("Carrot", saved.Ingredients[0].Name);
+        Assert.Equal("Simmer", saved.Instructions);
+        await store.SaveGoodAsync("POTATO", true);
+        Assert.Equal(2, (await store.ReadAsync()).Goods.Count);
+        await Assert.ThrowsAsync<ArgumentException>(() => store.SaveGoodAsync("Potato", false));
+        await store.AddMealAsync(week, recipe.Id);
+        var cook = Assert.Single((await store.ReadAsync()).Meals);
+        await store.AddMealAsync(week.AddDays(1), recipe.Id, cook.Id);
+        await store.AddMealAsync(week.AddDays(2), recipe.Id, cook.Id);
+        await Assert.ThrowsAsync<ArgumentException>(() => store.AddMealAsync(week, recipe.Id));
+        await store.RemoveMealAsync(cook.Id);
+        var meals = (await store.ReadAsync()).Meals.OrderBy(x => x.Date).ToArray();
+        Assert.Null(meals[0].LeftoversFromMealId);
+        Assert.Equal(meals[0].Id, meals[1].LeftoversFromMealId);
+        await store.SetShoppingQuantityAsync(week, "Potato", "item", 4);
+        Assert.Single((await store.ReadAsync()).ShoppingOverrides);
+        await store.ResetShoppingQuantitiesAsync(week);
+        Assert.Empty((await store.ReadAsync()).ShoppingOverrides);
+        await store.CreateGoodAndAddExtraAsync(week, "Sponge", false, 1, "item");
+        await Assert.ThrowsAsync<ArgumentException>(() => store.CreateGoodAndAddExtraAsync(week, "SPONGE", false, 1, "item"));
+        await Assert.ThrowsAsync<ArgumentException>(() => store.AddExtraItemAsync(week, Guid.NewGuid(), 1, "item"));
+        var extra = Assert.Single((await store.ReadAsync()).ExtraItems);
+        await store.RemoveExtraItemAsync(extra.Id);
+        Assert.Empty((await Open().ReadAsync()).ExtraItems);
+        await store.DeleteAsync(recipe.Id);
+        var final = await Open().ReadAsync();
+        Assert.Empty(final.Recipes);
+        Assert.Empty(final.Meals);
+        Assert.Equal(3, final.Goods.Count);
+    }
+
     public void Dispose() { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
 
     private sealed class TestEnvironment : IWebHostEnvironment
@@ -160,7 +211,10 @@ public sealed class ShoppingPurchaseTests : IDisposable
         public string EnvironmentName { get; set; } = "Testing";
         public string ContentRootPath { get; set; } = Path.GetTempPath();
         public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
-        public string WebRootPath { get; set; } = Path.GetTempPath();
+        public string WebRootPath { get; set; } = Path.Combine(Path.GetTempPath(), "wwwroot");
         public IFileProvider WebRootFileProvider { get; set; } = new NullFileProvider();
     }
 }
+
+public sealed class JsonShoppingPurchaseTests() : ShoppingPurchaseTests(false);
+public sealed class SqliteShoppingPurchaseTests() : ShoppingPurchaseTests(true);

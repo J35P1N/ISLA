@@ -7,6 +7,7 @@ services:
       - "8080:8080"
     environment:
       ASPNETCORE_ENVIRONMENT: Production
+      Setup__Token: ${ISLA_SETUP_TOKEN:-}
     restart: unless-stopped
     volumes:
       - recipe-data:/app/data

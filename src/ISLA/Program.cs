@@ -1,11 +1,12 @@
 using ISLA.Components;
 using ISLA.Security;
 using ISLA.Services;
+using ISLA.Storage;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 
-var configurationArgs = args.Where(argument => argument != "--reset-admin").ToArray();
+var configurationArgs = args.Where(argument => argument != "--reset-admin" && argument != "--upgrade-storage").ToArray();
 var builder = WebApplication.CreateBuilder(configurationArgs);
 if (builder.Configuration["ISLA_CONFIG_FILE"] is { Length: > 0 } configFile)
     builder.Configuration.AddJsonFile(Path.GetFullPath(configFile), optional: false, reloadOnChange: false)
@@ -26,7 +27,15 @@ builder.Services.AddScoped<AuthenticationStateProvider, SessionAuthenticationSta
 builder.Services.AddAuthentication("Cookies").AddCookie("Cookies", options =>
 {
     options.LoginPath = "/login";
-    options.AccessDeniedPath = "/login";
+    options.AccessDeniedPath = "/access-denied";
+    options.Events.OnRedirectToAccessDenied = context =>
+    {
+        if (HttpMethods.IsGet(context.Request.Method) || HttpMethods.IsHead(context.Request.Method))
+            context.Response.Redirect(context.RedirectUri);
+        else
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        return Task.CompletedTask;
+    };
     options.SlidingExpiration = false;
     options.ExpireTimeSpan = TimeSpan.FromDays(90);
     options.Cookie.Name = "ISLA.Session";
@@ -42,9 +51,15 @@ builder.Services.AddAuthentication("Cookies").AddCookie("Cookies", options =>
     };
 });
 builder.Services.AddAuthorization(options => options.AddPolicy("Administrator", policy => policy.RequireRole("Administrator")));
-builder.Services.AddSingleton<IIdentityRepository, JsonIdentityRepository>();
+builder.Services.AddSingleton<StorageConfiguration>();
+builder.Services.AddSingleton<SqliteStorage>();
+builder.Services.AddSingleton<JsonIdentityRepository>();
+builder.Services.AddSingleton<SqliteIdentityRepository>();
+builder.Services.AddSingleton<IIdentityRepository, ConfiguredIdentityRepository>();
 builder.Services.AddSingleton<Accounts>();
-builder.Services.AddSingleton<IHouseholdPersistence, JsonHouseholdPersistence>();
+builder.Services.AddSingleton<JsonHouseholdPersistence>();
+builder.Services.AddSingleton<SqliteHouseholdPersistence>();
+builder.Services.AddSingleton<IHouseholdPersistence, ConfiguredHouseholdPersistence>();
 builder.Services.AddSingleton(sp => new RecipeStore(sp.GetRequiredService<IHouseholdPersistence>()));
 builder.Services.AddSingleton<HouseholdTransfer>();
 builder.Services.AddSingleton<SetupService>();
@@ -54,36 +69,68 @@ builder.Services.AddScoped<Microsoft.AspNetCore.Components.Server.Circuits.Circu
 builder.Services.AddScoped<IHouseholdService, HouseholdService>();
 var app = builder.Build();
 
-if (args.Contains("--reset-admin"))
+var storage = app.Services.GetRequiredService<StorageConfiguration>();
+if (args.Contains("--upgrade-storage"))
 {
-    var accounts = app.Services.GetRequiredService<Accounts>();
-    var username = Environment.GetEnvironmentVariable("ISLA_RESET_USERNAME") ?? "";
-    var passwordFile = Environment.GetEnvironmentVariable("ISLA_RESET_PASSWORD_FILE") ?? throw new InvalidOperationException("Set ISLA_RESET_USERNAME and ISLA_RESET_PASSWORD_FILE to a restricted password file; stop the server first.");
-    var account = (await accounts.ListAsync()).SingleOrDefault(a => a.Name.Equals(username, StringComparison.OrdinalIgnoreCase) && a.Administrator)
-        ?? throw new InvalidOperationException("Administrator not found.");
-    await accounts.PasswordAsync(account.Id, (await File.ReadAllTextAsync(passwordFile)).TrimEnd('\r', '\n'));
-    await accounts.UpdateAsync(account.Id, true, false);
-    Console.WriteLine("Administrator password reset and sessions revoked.");
-    installation.Dispose();
+    try
+    {
+        if (storage.ConfigurationError is not null || storage.Provider != "Sqlite") throw new InvalidOperationException("Configure SQLite before running --upgrade-storage.");
+        await app.Services.GetRequiredService<SqliteStorage>().UpgradeAsync();
+        Console.WriteLine("SQLite storage schema is up to date.");
+    }
+    catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
+    { Console.Error.WriteLine("Storage upgrade failed (" + ex.GetType().Name + "). Check configuration and restore a compatible backup if necessary."); Environment.ExitCode = 1; }
+    finally { installation.Dispose(); }
     return;
 }
+if (args.Contains("--reset-admin"))
+{
+    try
+    {
+        if (storage.ConfigurationError is not null) throw new InvalidDataException(storage.ConfigurationError);
+        if (storage.Provider == "Sqlite") await app.Services.GetRequiredService<SqliteStorage>().ValidateAsync();
+        var accounts = app.Services.GetRequiredService<Accounts>();
+        var username = Environment.GetEnvironmentVariable("ISLA_RESET_USERNAME") ?? "";
+        var passwordFile = Environment.GetEnvironmentVariable("ISLA_RESET_PASSWORD_FILE") ?? throw new InvalidOperationException("Set ISLA_RESET_USERNAME and ISLA_RESET_PASSWORD_FILE to a restricted password file; stop the server first.");
+        var account = (await accounts.ListAsync()).SingleOrDefault(a => a.Name.Equals(username, StringComparison.OrdinalIgnoreCase) && a.Administrator)
+            ?? throw new InvalidOperationException("Administrator not found.");
+        await accounts.PasswordAsync(account.Id, (await File.ReadAllTextAsync(passwordFile)).TrimEnd('\r', '\n'));
+        await accounts.UpdateAsync(account.Id, true, false);
+        Console.WriteLine("Administrator password reset and sessions revoked.");
+    }
+    catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or ArgumentException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException or System.Text.Json.JsonException)
+    {
+        Console.Error.WriteLine("Administrator recovery failed (" + ex.GetType().Name + "). Check the selected provider, data directory, username, password file and schema compatibility.");
+        Environment.ExitCode = 1;
+    }
+    finally { installation.Dispose(); }
+    return;
+}
+
 // Validate configured files at startup. Never silently create a fresh installation on corruption.
 try
 {
+    if (storage.ConfigurationError is not null) throw new InvalidDataException(storage.ConfigurationError);
+    var sqlite = app.Services.GetRequiredService<SqliteStorage>();
+    if (storage.Provider == "Sqlite")
+    {
+        sqlite.CheckMissing();
+        if (sqlite.Exists) await sqlite.ValidateAsync();
+    }
     var configured = await app.Services.GetRequiredService<Accounts>().IsConfiguredAsync();
     var settingsPath = Path.Combine(installation.DirectoryPath, "installation.json");
-    if (File.Exists(settingsPath))
+    if (storage.Provider == "Json" && File.Exists(settingsPath))
     {
         using var settings = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(settingsPath));
         if (settings.RootElement.GetProperty("SchemaVersion").GetInt32() != 1 || settings.RootElement.GetProperty("Provider").GetString() != "Json")
             throw new InvalidDataException("Unsupported installation storage configuration.");
     }
-    if (configured && !File.Exists(Path.Combine(installation.DirectoryPath, "recipes.json")))
+    if (storage.Provider == "Json" && configured && !File.Exists(Path.Combine(installation.DirectoryPath, "recipes.json")))
         throw new InvalidDataException("Configured household storage is missing. Restore recipes.json from backup.");
     await app.Services.GetRequiredService<IHouseholdPersistence>().ReadAsync();
     if (!configured) installation.EnsureSetupToken(Console.Out);
 }
-catch (Exception ex) when (ex is IOException or InvalidDataException or System.Text.Json.JsonException or UnauthorizedAccessException or InvalidOperationException or KeyNotFoundException)
+catch (Exception ex) when (ex is IOException or InvalidDataException or System.Text.Json.JsonException or UnauthorizedAccessException or InvalidOperationException or KeyNotFoundException or Microsoft.Data.Sqlite.SqliteException or Microsoft.EntityFrameworkCore.DbUpdateException)
 {
     app.Logger.LogError("ISLA storage validation failed ({FailureType}). Restore a compatible private data backup and restart; setup remains closed.", ex.GetType().Name);
     app.Run(async context =>

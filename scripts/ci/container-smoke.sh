@@ -15,10 +15,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# An explicit ephemeral token keeps generated setup credentials out of CI logs.
+# Supply an ephemeral operator token without printing it in CI logs.
 token=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+for provider in Json Sqlite; do
 container=$(docker run -d --platform "$platform" -p 127.0.0.1::8080 \
-    -e "Setup__Token=$token" "$image")
+    -e "Setup__Token=$token" -e "Storage__Provider=$provider" "$image")
 user=$(docker inspect --format '{{.Config.User}}' "$container")
 [[ -n "$user" && "$user" != root && "$user" != 0 ]]
 port=$(docker port "$container" 8080/tcp)
@@ -60,4 +61,7 @@ while IFS= read -r asset; do
     curl --silent --show-error --fail "$base/$asset" -o "$work/script.js"
     test -s "$work/script.js"
 done < "$work/assets"
-echo "Container startup and Blazor assets verified for $platform."
+echo "Container startup and Blazor assets verified for $platform ($provider)."
+docker rm -f "$container" >/dev/null
+container=""
+done

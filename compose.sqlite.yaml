@@ -1,0 +1,6 @@
+# Optional operator-controlled SQLite deployment. Uses the existing local data volume.
+# docker compose -f compose.yaml -f compose.sqlite.yaml up -d --build
+services:
+  isla:
+    environment:
+      Storage__Provider: Sqlite

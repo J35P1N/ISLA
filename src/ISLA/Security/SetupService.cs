@@ -1,13 +1,16 @@
 using ISLA.Services;
+using ISLA.Storage;
 
 namespace ISLA.Security;
 
-public sealed class SetupService(Installation installation, Accounts accounts, IHouseholdPersistence household)
+public sealed class SetupService(Installation installation, Accounts accounts, IHouseholdPersistence household, StorageConfiguration? storage = null, SqliteStorage? sqlite = null)
 {
     private readonly SemaphoreSlim gate = new(1, 1);
     private int failures;
     private DateTimeOffset blockedUntil;
     public bool HasToken => installation.HasToken;
+    public string Provider => storage?.Provider ?? "Json";
+    public bool StorageControlled => storage?.ExternallyControlled ?? false;
     public async Task<bool> VerifyAsync(string token)
     {
         await gate.WaitAsync();
@@ -20,26 +23,44 @@ public sealed class SetupService(Installation installation, Accounts accounts, I
         }
         finally { gate.Release(); }
     }
-    public async Task ValidateStorageAsync(string token)
-    {
-        if (!await VerifyAsync(token)) throw new ArgumentException("Setup token was rejected or setup has already completed.");
-        await household.ReadAsync();
-        // Confirm the configured mount is writable before collecting administrator credentials.
-        var probe = Path.Combine(installation.DirectoryPath, ".setup-check-" + Guid.NewGuid().ToString("N"));
-        await using var stream = new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None,
-            bufferSize: 4096, options: FileOptions.Asynchronous | FileOptions.DeleteOnClose);
-        await stream.WriteAsync(new byte[] { 0 });
-        await stream.FlushAsync();
-    }
-    public async Task CompleteAsync(string token, string username, string password)
+    public async Task ValidateStorageAsync(string token, string? provider = null)
     {
         if (!await VerifyAsync(token)) throw new ArgumentException("Setup token was rejected or setup has already completed.");
         await gate.WaitAsync();
         try
         {
             if (await accounts.IsConfiguredAsync()) throw new ArgumentException("Setup has already completed.");
+            if (provider is not null && storage is not null) await storage.SelectForSetupAsync(provider);
+            // Check the mounted directory before creating a database.
+            var probe = Path.Combine(installation.DirectoryPath, ".setup-check-" + Guid.NewGuid().ToString("N"));
+            await using (var stream = new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                bufferSize: 4096, options: FileOptions.Asynchronous | FileOptions.DeleteOnClose))
+            {
+                await stream.WriteAsync(new byte[] { 0 });
+                await stream.FlushAsync();
+            }
+            if (Provider == "Sqlite") await sqlite!.InitializeAsync();
+            await household.ReadAsync();
+        }
+        finally { gate.Release(); }
+    }
+
+    public async Task CompleteAsync(string token, string username, string password, string? expectedProvider = null)
+    {
+        if (!await VerifyAsync(token)) throw new ArgumentException("Setup token was rejected or setup has already completed.");
+        await gate.WaitAsync();
+        try
+        {
+            if (await accounts.IsConfiguredAsync()) throw new ArgumentException("Setup has already completed.");
+            if (expectedProvider is not null && expectedProvider != Provider) throw new ArgumentException("Storage selection changed. Reload setup and review the active provider.");
             Accounts.Validate(username, password);
             await household.ReadAsync(); // Fail closed on damaged existing data.
+            if (Provider == "Sqlite")
+            {
+                await sqlite!.ValidateAsync();
+                await accounts.CreateAsync(username, password, true, initial: true);
+                return;
+            }
             var legacy = Path.Combine(installation.DirectoryPath, "recipes.json");
             if (File.Exists(legacy))
             {

@@ -52,3 +52,44 @@ secrets/
 **/installation.json
 **/*.pre-setup.bak
 **/keys/
+
+# SQLite storage, journals and local provider selection
+**/*.db
+**/*.db-*
+**/storage.json
+**/sqlite-installation.json
+
+# Incomplete SQLite schema staging files
+**/*.db.initializing*
+
+# Household data and local backup/export files outside App_Data
+**/recipes.json
+**/.instance.lock
+/backups/
+/isla-backups/
+**/isla-backup*.tar.gz
+**/isla-complete-backup*.tar.gz
+**/isla-household*.json
+**/isla-*-export.json
+**/isla-json-baseline.json
+
+# Private operator files and machine-specific Compose overrides
+**/reset-password.txt
+**/setup-token.txt
+**/isla-operator.json
+**/compose.override.yaml
+**/compose.override.yml
+**/compose.local.yaml
+**/compose.local.yml
+**/compose.manual.yaml
+**/compose.force-json.yaml
+
+# Logs may contain first-run setup tokens; reports may contain browser state
+**/*.log
+**/playwright-report/
+**/playwright/.cache/
+
+# Private certificate/key containers
+**/*.key
+**/*.pfx
+**/*.p12

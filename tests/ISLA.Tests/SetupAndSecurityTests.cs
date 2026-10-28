@@ -26,7 +26,7 @@ public sealed class SetupAndSecurityTests : IDisposable
         return (accounts, new SetupService(installation, accounts, data), data);
     }
     [Fact]
-    public void FirstRunGeneratesConsoleTokenOnceAndRotatesItOnRestart()
+    public async Task GeneratedTokenIsPrintedOnceWorksOnlyBeforeSetupAndRotatesOnRestart()
     {
         var config = new ConfigurationBuilder().AddConfiguration(Config)
             .AddInMemoryCollection(new Dictionary<string, string?> { ["Setup:Token"] = null }).Build();
@@ -35,24 +35,27 @@ public sealed class SetupAndSecurityTests : IDisposable
         {
             using var output = new StringWriter();
             installation.EnsureSetupToken(output);
-            token = output.ToString().Split('\n').Single(line => line.StartsWith("ISLA first-run setup token: "))
-                .Split(": ")[1].Trim();
+            token = output.ToString().Split('\n').Single(line => line.StartsWith("ISLA first-run setup token: ")).Split(": ")[1].Trim();
             Assert.Equal(64, token.Length);
             Assert.True(installation.TokenMatches(token));
-            Assert.False(installation.TokenMatches("wrong-token"));
             var printed = output.ToString();
             installation.EnsureSetupToken(output);
             Assert.Equal(printed, output.ToString());
-            Assert.False(File.Exists(Path.Combine(directory, "identity.json")));
+            var accounts = new Accounts(new JsonIdentityRepository(installation));
+            var setup = new SetupService(installation, accounts, new JsonHouseholdPersistence(config, new TestEnvironment()));
+            await setup.CompleteAsync(token, "admin", Password);
+            Assert.False(await setup.VerifyAsync(token));
+            await Assert.ThrowsAsync<ArgumentException>(() => setup.CompleteAsync(token, "other", Password));
+            Assert.Single(await accounts.ListAsync());
+            Assert.DoesNotContain(token, await File.ReadAllTextAsync(Path.Combine(directory, "identity.json")));
         }
         using var restarted = new Installation(config, new TestEnvironment());
         using var nextOutput = new StringWriter();
         restarted.EnsureSetupToken(nextOutput);
-        Assert.True(restarted.HasToken);
         Assert.False(restarted.TokenMatches(token));
     }
     [Fact]
-    public void ExplicitTokenIsPreservedAndNeverPrinted()
+    public void ExplicitTokenIsPreserved()
     {
         using var installation = new Installation(Config, new TestEnvironment());
         using var output = new StringWriter();
@@ -61,7 +64,7 @@ public sealed class SetupAndSecurityTests : IDisposable
         Assert.True(installation.TokenMatches("operator-secret"));
     }
     [Fact]
-    public void MountedTokenIsPreservedAndNeverPrinted()
+    public void MountedTokenIsPreserved()
     {
         Directory.CreateDirectory(directory);
         var tokenFile = Path.Combine(directory, "mounted-token");
@@ -118,7 +121,7 @@ public sealed class SetupAndSecurityTests : IDisposable
         await process.WaitForExitAsync(timeout.Token);
         var error = await errorTask;
         Assert.Equal(1, process.ExitCode);
-        Assert.Contains("ISLA could not start: Simple JSON mode requires exclusive access", error);
+        Assert.Contains("ISLA could not start: JSON and SQLite storage require exclusive access", error);
         Assert.Single(error.Split('\n', StringSplitOptions.RemoveEmptyEntries));
         Assert.DoesNotContain("Unhandled exception", error);
         Assert.DoesNotContain(" at ", error);

@@ -1,0 +1,11 @@
+{
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
+  },
+  "name": "isla-browser-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test -c playwright.config.mjs"
+  }
+}

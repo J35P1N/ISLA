@@ -2,7 +2,15 @@
 <PageTitle>Sign in | ISLA</PageTitle>
 <div class="page-intro mx-auto max-w-xl space-y-4">
     <h1>Sign in to ISLA</h1>
-    @if (Failed is not null) { <p role="alert">Sign-in failed. Check your credentials or wait 15 minutes if your account is locked.</p> }
+    @if (Failed is not null)
+    {
+        <div class="app-notification notification-error" role="alert" aria-atomic="true">
+            <span class="notification-icon" aria-hidden="true"><ActionIcon Name="close" /></span>
+            <p class="min-w-0 flex-1 text-sm font-medium">@(Failed == "locked"
+                ? "Your account is temporarily locked after too many unsuccessful sign-in attempts. Try again in 15 minutes, or ask a household administrator to reset your password."
+                : "Sign-in failed. Check your username and password.")</p>
+        </div>
+    }
     <form method="post" action="/account/login" class="space-y-4" data-enhance="false">
         <AntiforgeryToken />
         <label class="block">Username<input class="field" name="username" autocomplete="username" required maxlength="100" /></label>

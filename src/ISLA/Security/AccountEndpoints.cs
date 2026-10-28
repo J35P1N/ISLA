@@ -14,9 +14,9 @@ public static class AccountEndpoints
             if (!await antiforgery.IsRequestValidAsync(context)) return Results.BadRequest("Invalid antiforgery token.");
             var form = await context.Request.ReadFormAsync();
             var remember = form["remember"] == "true";
-            var principal = await accounts.LoginAsync(form["username"].ToString(), form["password"].ToString(), remember);
-            if (principal is null) return Results.LocalRedirect("/login?failed=true");
-            await context.SignInAsync("Cookies", principal, new AuthenticationProperties { IsPersistent = remember, ExpiresUtc = DateTimeOffset.UtcNow.AddDays(remember ? 90 : 1), AllowRefresh = false });
+            var result = await accounts.AuthenticateAsync(form["username"].ToString(), form["password"].ToString(), remember);
+            if (result.Principal is null) return Results.LocalRedirect(result.LockedOut ? "/login?failed=locked" : "/login?failed=true");
+            await context.SignInAsync("Cookies", result.Principal, new AuthenticationProperties { IsPersistent = remember, ExpiresUtc = DateTimeOffset.UtcNow.AddDays(remember ? 90 : 1), AllowRefresh = false });
             return Results.LocalRedirect("/");
         }).AllowAnonymous();
         app.MapPost("/account/logout", async (HttpContext context, Accounts accounts, IAntiforgery antiforgery) =>

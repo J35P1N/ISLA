@@ -4,6 +4,7 @@
 @using ISLA.Security
 @using ISLA.Services
 @using System.Security.Claims
+@inject ISLA.Storage.StorageConfiguration Storage
 @inject Accounts Accounts
 @inject HouseholdTransfer HouseholdTransfer
 @inject AccessGuard Access
@@ -18,19 +19,34 @@ else
 {
 <div class="page-intro space-y-4">
     <h1>Settings</h1>
-    @if (message is not null) { <p role="status">@message</p> }
     <h2>Change your password</h2>
     <form @onsubmit="ChangePassword" @onsubmit:preventDefault class="max-w-xl space-y-3">
         <label class="block">Current password<input class="field" type="password" @bind="currentPassword" autocomplete="current-password" required /></label>
         <label class="block">New password<input class="field" type="password" @bind="newPassword" autocomplete="new-password" minlength="12" maxlength="256" required /></label>
         <button class="primary-button">Change password and sign out all browsers</button>
     </form>
+    @if (passwordFeedback is { } passwordResult)
+    {
+        <Notification @key="passwordResult" Message="@passwordResult.Message" IsError="@passwordResult.IsError" Dismissed="() => passwordFeedback = null" />
+    }
 </div>
 @if (administrator)
 {
     <section class="page-intro space-y-4">
         <h2 class="text-xl">Household storage</h2>
-        <p>Simple JSON mode · one application instance. DataDirectory is controlled by the operator and requires a restart to change.</p>
+        <p>Active provider: <strong>@Storage.Provider</strong> · one application instance. DataDirectory is controlled by the operator.</p>
+        <p>@(Storage.ExternallyControlled ? "Deployment configuration controls the provider; this field is read-only." : "Provider changes are saved locally and require a restart.")</p>
+        <form @onsubmit="SaveStorage" @onsubmit:preventDefault class="max-w-xl space-y-3">
+            <label>Provider after restart<select class="field" @bind="nextProvider" disabled="@Storage.ExternallyControlled"><option value="Json">Simple — JSON</option><option value="Sqlite">Medium — SQLite</option></select></label>
+            @if (!Storage.ExternallyControlled) { <button class="secondary-button">Save storage choice</button> }
+        </form>
+        @if (storageFeedback is { } storageResult)
+        {
+            <Notification @key="storageResult" Message="@storageResult.Message" IsError="@storageResult.IsError" Dismissed="() => storageFeedback = null" />
+        }
+        @if (Storage.PendingProvider is not null) { <p role="status">Restart required. Next provider: @Storage.PendingProvider.</p> }
+        <p>To move storage: export the household first, select an empty destination, restart, create its administrator, then import. Other users must be recreated. Previous storage files are retained.</p>
+        <p>SQLite requires a local persistent volume and one application instance. Stop ISLA before backing up the complete data directory, including keys and configuration. Do not use shared network filesystems.</p>
         <a class="secondary-button" href="/admin/export" data-enhance-nav="false">Export household</a>
         <p>Exports contain household data only. Accounts, passwords, sessions, setup tokens and encryption keys are excluded. Import requires a completely empty household.</p>
         <form @onsubmit="ImportHousehold" @onsubmit:preventDefault class="space-y-3" novalidate>
@@ -53,16 +69,26 @@ else
             <label class="block">Initial password<input class="field" type="password" @bind="initialPassword" autocomplete="new-password" minlength="12" maxlength="256" required /></label>
             <label class="block"><input type="checkbox" @bind="createAdmin" /> Administrator</label>
             <button class="primary-button">Create account</button>
+            @if (creationFeedback is { } creationResult)
+            {
+                <Notification @key="creationResult" Message="@creationResult.Message" IsError="@creationResult.IsError" Dismissed="() => creationFeedback = null" />
+            }
         </form>
         @foreach (var account in users)
         {
             <div class="rounded-xl border border-slate-200 p-4 space-y-3" @key="account.Id">
                 <p><strong>@account.Name</strong> · @(account.Administrator ? "Administrator" : "Member") · @(account.Disabled ? "Disabled" : "Active")</p>
                 <div class="flex flex-wrap gap-2">
-                    <button class="secondary-button" @onclick="() => Manage(() => Accounts.UpdateAsync(account.Id, !account.Administrator, account.Disabled))">@(account.Administrator ? "Make member" : "Make administrator")</button>
-                    <button class="secondary-button" @onclick="() => Manage(() => Accounts.UpdateAsync(account.Id, account.Administrator, !account.Disabled))">@(account.Disabled ? "Enable" : "Disable")</button>
-                    <button class="secondary-button" @onclick="() => Manage(() => Accounts.RevokeAsync(account.Id))">Revoke all sessions</button>
+                    <button class="secondary-button" @onclick="() => Manage(account.Id, () => Accounts.UpdateAsync(account.Id, !account.Administrator, account.Disabled))">@(account.Administrator ? "Make member" : "Make administrator")</button>
+                    <button class="secondary-button" @onclick="() => Manage(account.Id, () => Accounts.UpdateAsync(account.Id, account.Administrator, !account.Disabled))">@(account.Disabled ? "Enable" : "Disable")</button>
+                    <button class="secondary-button" @onclick="() => Manage(account.Id, () => Accounts.RevokeAsync(account.Id))">Revoke all sessions</button>
                 </div>
+                @if (accountFeedback.TryGetValue(account.Id, out var actionResult))
+                {
+                    <div class="@(actionResult.IsError ? "rounded-2xl border-l-4 border-red-600" : null)">
+                        <Notification @key="actionResult" Message="@actionResult.Message" IsError="@actionResult.IsError" Dismissed="() => accountFeedback.Remove(account.Id)" />
+                    </div>
+                }
                 <form @onsubmit="() => ResetPassword(account.Id)" @onsubmit:preventDefault class="max-w-xl space-y-2" novalidate>
                     <label>New password for @account.Name
                         <input class="field" type="password" value="@resetPasswords.GetValueOrDefault(account.Id)"
@@ -86,6 +112,7 @@ else
 }
 @code {
     [SupplyParameterFromQuery(Name = "transfer")] public string? Transfer { get; set; }
+    private string nextProvider = "Json";
     private bool administrator, createAdmin, ready;
     private const long MaximumImportBytes = 10 * 1024 * 1024;
     private IBrowserFile? importFile;
@@ -96,16 +123,34 @@ else
         if (firstRender) { ready = true; StateHasChanged(); }
     }
     private string currentPassword = "", newPassword = "", name = "", initialPassword = "";
-    private string? message;
+    private sealed class ActionFeedback(string message, bool isError)
+    {
+        public string Message { get; } = message;
+        public bool IsError { get; } = isError;
+    }
+    private ActionFeedback? passwordFeedback, storageFeedback, creationFeedback;
+    private readonly Dictionary<string, ActionFeedback> accountFeedback = [];
     private List<Account> users = [];
     private readonly Dictionary<string, string> resetPasswords = [];
     private readonly Dictionary<string, (string Message, bool IsError)> resetFeedback = [];
     private readonly HashSet<string> pendingResets = [];
     protected override async Task OnInitializedAsync()
     {
+        nextProvider = Storage.PendingProvider ?? Storage.Provider;
         var user = await Access.RequireAsync();
         administrator = user.IsInRole("Administrator");
         if (administrator) users = await Accounts.ListAsync();
+    }
+    private async Task SaveStorage()
+    {
+        try
+        {
+            await Access.RequireAsync(true);
+            await Storage.ScheduleAsync(nextProvider);
+            storageFeedback = new(Storage.PendingProvider is null ? "Storage choice saved." : "Storage choice saved. Export your household before restarting ISLA. The destination will need setup and import.", false);
+        }
+        catch (ArgumentException ex) { storageFeedback = new(ex.Message, true); }
+        catch (IOException) { storageFeedback = new("Storage settings could not be saved. Ask the operator to check directory permissions.", true); }
     }
     private void SelectImport(InputFileChangeEventArgs args)
     {
@@ -156,22 +201,35 @@ else
             currentPassword = newPassword = "";
             await Navigation.GoToLoginAsync();
         }
-        catch (ArgumentException ex) { message = ex.Message; }
+        catch (ArgumentException ex) { passwordFeedback = new(ex.Message, true); }
     }
-    private async Task Manage(Func<Task> action)
+    private async Task Manage(string? accountId, Func<Task> action)
     {
         try
         {
             await Access.RequireAsync(true);
             await action();
-            message = "Account updated. Affected browser sessions have been revoked.";
+            ReportManagement(accountId, accountId is null ? "Account created." : "Account updated. Affected browser sessions have been revoked.", false);
             users = await Accounts.ListAsync();
             try { await Access.RequireAsync(true); }
             catch (UnauthorizedAccessException) { await Navigation.GoToLoginAsync(); }
         }
-        catch (ArgumentException ex) { message = ex.Message; }
+        catch (ArgumentException ex) { ReportManagement(accountId, ex.Message, true); }
+        catch (UnauthorizedAccessException)
+        {
+            ReportManagement(accountId, "Your administrator session has ended. Sign in again.", true);
+            await Navigation.GoToLoginAsync();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or System.Text.Json.JsonException)
+        { ReportManagement(accountId, "The account could not be updated. Try again or ask the operator to check storage.", true); }
     }
-    private Task CreateAccount() => Manage(async () => { await Accounts.CreateAsync(name, initialPassword, createAdmin); name = initialPassword = ""; createAdmin = false; });
+    private void ReportManagement(string? accountId, string text, bool isError)
+    {
+        var feedback = new ActionFeedback(text, isError);
+        if (accountId is null) creationFeedback = feedback;
+        else accountFeedback[accountId] = feedback;
+    }
+    private Task CreateAccount() => Manage(null, async () => { await Accounts.CreateAsync(name, initialPassword, createAdmin); name = initialPassword = ""; createAdmin = false; });
     private void SetResetPassword(string id, string password)
     {
         resetPasswords[id] = password;

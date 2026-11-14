@@ -88,13 +88,22 @@
             }
             else
             {
-            <label class="block font-medium">Good
-                <select class="field" @bind="selectedGood" required>
+            <div>
+            <label class="block font-medium">Find a good
+                <input class="field" type="search" placeholder="Search goods…" @bind="goodSearch" @bind:event="oninput" @bind:after="ClearGoodSelection" disabled="@busy" />
+            </label>
+            <label class="mt-2 block font-medium">Good
+                <select class="field" @bind="selectedGood" required disabled="@busy">
                     <option value="">Choose a good…</option>
-                    @foreach (var good in data.Goods.OrderBy(g => g.Name))
+                    @foreach (var good in data.Goods.Where(g => g.Name.Contains(goodSearch.Trim(), StringComparison.OrdinalIgnoreCase)).OrderBy(g => g.Name))
                     { <option value="@good.Id">@good.Name (@(good.IsFood ? "food" : "non-food"))</option> }
                 </select>
             </label>
+            @if (!data.Goods.Any(g => g.Name.Contains(goodSearch.Trim(), StringComparison.OrdinalIgnoreCase)))
+            {
+                <p class="mt-2 text-sm text-slate-600" role="status">No goods match your search. Try another name or choose Create new good.</p>
+            }
+            </div>
             }
             <label class="block font-medium">Quantity<input class="field" type="number" @bind="quantity" min="@(unit == "item" ? "1" : "0.001")" step="@(unit == "item" ? "1" : "any")" required /></label>
             <label class="block font-medium">Measurement
@@ -213,6 +222,8 @@ else
     private RecipeData data = new();
     private readonly Dictionary<(string Name, string Unit), decimal> rowQuantities = [];
     private string selectedGood = "", unit = "item";
+    private string goodSearch = "";
+    private void ClearGoodSelection() => selectedGood = "";
     private decimal quantity = 1;
     private bool busy, creatingGood;
     private string newGoodName = "";

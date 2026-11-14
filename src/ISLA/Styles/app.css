@@ -44,7 +44,11 @@
 
 @layer components {
     .app-shell { padding-bottom: calc(6rem + env(safe-area-inset-bottom, 0px)); }
-    .bottom-navigation { padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px)); }
+    .bottom-navigation {
+        /* Avoid Firefox stretching an auto-height fixed footer as mobile browser chrome changes. */
+        height: max-content;
+        padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
+    }
     .bottom-link { @apply flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-slate-500 transition-colors hover:bg-slate-100; }
     .bottom-link.active { @apply bg-blue-50 text-blue-800; }
 }

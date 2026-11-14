@@ -88,22 +88,27 @@
             }
             else
             {
-            <div>
-            <label class="block font-medium">Find a good
-                <input class="field" type="search" placeholder="Search goods…" @bind="goodSearch" @bind:event="oninput" @bind:after="ClearGoodSelection" disabled="@busy" />
-            </label>
-            <label class="mt-2 block font-medium">Good
-                <select class="field" @bind="selectedGood" required disabled="@busy">
-                    <option value="">Choose a good…</option>
-                    @foreach (var good in data.Goods.Where(g => g.Name.Contains(goodSearch.Trim(), StringComparison.OrdinalIgnoreCase)).OrderBy(g => g.Name))
-                    { <option value="@good.Id">@good.Name (@(good.IsFood ? "food" : "non-food"))</option> }
-                </select>
-            </label>
-            @if (!data.Goods.Any(g => g.Name.Contains(goodSearch.Trim(), StringComparison.OrdinalIgnoreCase)))
-            {
-                <p class="mt-2 text-sm text-slate-600" role="status">No goods match your search. Try another name or choose Create new good.</p>
-            }
-            </div>
+                <div>
+                    <label class="block font-medium">Find a good
+                        <input class="field" type="search" placeholder="Search goods to add…" @bind="goodSearch" @bind:event="oninput" @bind:after="ClearGoodSelection" disabled="@busy" />
+                    </label>
+                    <fieldset class="mt-2 min-w-0" disabled="@busy">
+                        <legend class="font-medium">Choose a good</legend>
+                        <div class="mt-1 max-h-48 overflow-y-auto rounded-xl border border-slate-300 bg-white">
+                            @foreach (var good in data.Goods.Where(g => g.Name.Contains(goodSearch.Trim(), StringComparison.OrdinalIgnoreCase)).OrderBy(g => g.Name))
+                            {
+                                <label @key="good.Id" class="flex min-h-11 cursor-pointer items-center gap-3 px-3 py-2 hover:bg-slate-100">
+                                    <input type="radio" name="extra-good" value="@good.Id" checked="@(selectedGood == good.Id.ToString())" @onchange="() => selectedGood = good.Id.ToString()" />
+                                    <span>@good.Name <span class="text-sm text-slate-500">(@(good.IsFood ? "food" : "non-food"))</span></span>
+                                </label>
+                            }
+                        </div>
+                    </fieldset>
+                    @if (!data.Goods.Any(g => g.Name.Contains(goodSearch.Trim(), StringComparison.OrdinalIgnoreCase)))
+                    {
+                        <p class="mt-2 text-sm text-slate-600" role="status">No goods match your search. Try another name or choose Create new good.</p>
+                    }
+                </div>
             }
             <label class="block font-medium">Quantity<input class="field" type="number" @bind="quantity" min="@(unit == "item" ? "1" : "0.001")" step="@(unit == "item" ? "1" : "any")" required /></label>
             <label class="block font-medium">Measurement

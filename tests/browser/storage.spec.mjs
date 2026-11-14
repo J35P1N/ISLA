@@ -45,12 +45,20 @@ async function setup(page, app, provider, controlled = false) {
   await page.getByRole('button', { name: 'Initialise ISLA' }).click();
   await expect(page).toHaveURL(/\/login$/);
 }
+async function submitLogin(page) {
+  // Failed logins can redirect to the same URL and display identical feedback.
+  // Wait for this submission's document navigation before attempting another login or reset.
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: 'load' }),
+    page.getByRole('button', { name: 'Sign in', exact: true }).click(),
+  ]);
+}
 async function login(page, app, name = 'admin', secret = password, remember = true) {
   await page.goto(`${app.url}/login`);
   await page.getByLabel('Username', { exact: true }).fill(name);
   await page.getByLabel('Password', { exact: true }).fill(secret);
   await page.getByLabel('Remember this browser').setChecked(remember);
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await submitLogin(page);
   await expect(page.getByRole('heading', { name: 'Weekly planner', exact: true })).toBeVisible();
 }
 async function exported(page, app) {
@@ -134,6 +142,8 @@ for (const provider of ['Json', 'Sqlite']) {
       await page.reload();
       await expect(page.getByRole('button', { name: 'Finish shopping' })).toBeVisible();
       await page.getByRole('button', { name: 'Finish shopping' }).click();
+      await expect(page.getByRole('button', { name: 'In-store mode', exact: true })).toBeVisible();
+      await expect.poll(() => page.evaluate(() => localStorage.getItem('isla.shopping-mode'))).toBeNull();
       await page.goto(`${app.url}/shopping-list?week=2026-11-02`);
       await expect(page.getByText('£3.60', { exact: true })).toBeVisible();
 
@@ -150,6 +160,32 @@ for (const provider of ['Json', 'Sqlite']) {
       await page.getByLabel('Name', { exact: true }).fill('Reconnected good');
       await page.getByRole('button', { name: 'Save good' }).click();
       await expect.poll(async () => (await exported(page, app)).Household.Goods.some(g => g.Name === 'Reconnected good')).toBe(true);
+      // Search and select extra goods at a phone-sized viewport, including a non-recipe good.
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(`${app.url}/shopping-list?week=${week}`);
+      const search = page.getByRole('searchbox', { name: 'Find a good', exact: true });
+      const choices = page.getByRole('group', { name: 'Choose a good', exact: true });
+      const addExtra = page.getByRole('button', { name: 'Add to list', exact: true });
+      await expect(choices.getByRole('radio', { name: 'Sponge (non-food)', exact: true })).toBeVisible();
+      await search.fill('sPoN');
+      await expect(choices.getByRole('radio')).toHaveCount(1);
+      await choices.getByRole('radio').check();
+      await expect(addExtra).toBeEnabled();
+      await search.fill('no matching household good');
+      await expect(choices.getByRole('radio')).toHaveCount(0);
+      await expect(page.getByRole('status')).toContainText('No goods match your search');
+      await expect(addExtra).toBeDisabled();
+      await search.clear();
+      await expect(choices.getByRole('radio')).toHaveCount(6);
+      await search.fill('sponge');
+      await expect(choices.getByRole('radio')).toHaveCount(1);
+      await choices.getByRole('radio', { name: 'Sponge (non-food)', exact: true }).check();
+      await addExtra.click();
+      await expect(page.getByText('Shopping list updated.', { exact: true })).toBeVisible();
+      const withExtra = await exported(page, app);
+      const spongeId = withExtra.Household.Goods.find(g => g.Name === 'Sponge').Id;
+      expect(withExtra.Household.ExtraItems.some(x => x.GoodId === spongeId && x.Week === week && x.Quantity === 1)).toBe(true);
+      await page.setViewportSize({ width: 1280, height: 720 });
       await page.goto(`${app.url}/settings`);
       await page.getByLabel('New username', { exact: true }).fill('member');
       await page.getByLabel('Initial password', { exact: true }).fill(password);
@@ -185,6 +221,7 @@ for (const provider of ['Json', 'Sqlite']) {
         const row = await accountRow(page, 'member');
         await row.getByLabel('New password for member').fill(replacement);
         await row.getByRole('button', { name: 'Reset password and revoke sessions' }).click();
+        await expect(row.getByLabel('New password for member')).toHaveValue('');
         await expect(row.getByRole('status')).toContainText('Password reset');
         const revoked = await member.request.get(`${app.url}/goods`, { maxRedirects: 0 });
         expect(revoked.status()).toBe(302);
@@ -192,13 +229,14 @@ for (const provider of ['Json', 'Sqlite']) {
         for (let attempt = 0; attempt < 6; attempt++) {
           await member.getByLabel('Username', { exact: true }).fill('member');
           await member.getByLabel('Password', { exact: true }).fill(attempt === 5 ? replacement : 'incorrect');
-          await member.getByRole('button', { name: 'Sign in', exact: true }).click();
+          await submitLogin(member);
           await expect(member).toHaveURL(/\/login\?failed=/);
           await expect(member.getByRole('alert')).toContainText(attempt >= 4 ? 'Your account is temporarily locked' : 'Check your username and password');
           await expect(member.getByRole('alert')).toBeInViewport();
         }
         await row.getByLabel('New password for member').fill(replacement);
         await row.getByRole('button', { name: 'Reset password and revoke sessions', exact: true }).click();
+        await expect(row.getByLabel('New password for member')).toHaveValue('');
         await expect(row.getByRole('status')).toContainText('Password reset');
         await login(member, app, 'member', replacement);
         await row.getByRole('button', { name: 'Disable', exact: true }).click();
